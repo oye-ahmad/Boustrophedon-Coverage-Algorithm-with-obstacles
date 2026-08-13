@@ -1,0 +1,66 @@
+[1.648s] Invoking command in '/home/ahmad/coverage_ws/src/coverage_planner': PYTHONPATH=/home/ahmad/coverage_ws/build/coverage_planner/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/coverage_planner build --build-base /home/ahmad/coverage_ws/build/coverage_planner/build install --record /home/ahmad/coverage_ws/build/coverage_planner/install.log --install-scripts $base/lib/coverage_planner --single-version-externally-managed install_data
+[2.017s] /home/ahmad/.local/lib/python3.10/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'script-dir' in 'develop' (setup.cfg), please use the underscore name 'script_dir' instead.
+[2.017s] !!
+[2.017s] 
+[2.017s]         ********************************************************************************
+[2.017s]         Usage of dash-separated 'script-dir' will not be supported in future
+[2.017s]         versions. Please use the underscore name 'script_dir' instead.
+[2.018s] 
+[2.018s] 
+[2.018s]         Available configuration options are listed in:
+[2.018s]         https://setuptools.pypa.io/en/latest/userguide/declarative_config.html
+[2.018s] 
+[2.018s]         This deprecation is overdue, please update your project and remove deprecated
+[2.018s]         calls to avoid build errors in the future.
+[2.018s] 
+[2.018s]         See https://github.com/pypa/setuptools/discussions/5011 for details.
+[2.019s]         ********************************************************************************
+[2.019s] 
+[2.019s] !!
+[2.019s]   opt = self._enforce_underscore(opt, section)
+[2.066s] /home/ahmad/.local/lib/python3.10/site-packages/setuptools/_distutils/dist.py:288: UserWarning: Unknown distribution option: 'tests_require'
+[2.067s]   warnings.warn(msg)
+[2.154s] /home/ahmad/.local/lib/python3.10/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'script-dir' in 'develop' (setup.cfg), please use the underscore name 'script_dir' instead.
+[2.155s] !!
+[2.155s] 
+[2.155s]         ********************************************************************************
+[2.155s]         Usage of dash-separated 'script-dir' will not be supported in future
+[2.155s]         versions. Please use the underscore name 'script_dir' instead.
+[2.156s]         (Affected: coverage_planner).
+[2.156s] 
+[2.156s]         Available configuration options are listed in:
+[2.156s]         https://setuptools.pypa.io/en/latest/userguide/declarative_config.html
+[2.157s] 
+[2.157s]         This deprecation is overdue, please update your project and remove deprecated
+[2.157s]         calls to avoid build errors in the future.
+[2.157s] 
+[2.158s]         See https://github.com/pypa/setuptools/discussions/5011 for details.
+[2.158s]         ********************************************************************************
+[2.158s] 
+[2.158s] !!
+[2.159s]   opt = self._enforce_underscore(opt, section)
+[2.314s] running egg_info
+[2.354s] writing ../../build/coverage_planner/coverage_planner.egg-info/PKG-INFO
+[2.354s] writing dependency_links to ../../build/coverage_planner/coverage_planner.egg-info/dependency_links.txt
+[2.354s] writing entry points to ../../build/coverage_planner/coverage_planner.egg-info/entry_points.txt
+[2.354s] writing requirements to ../../build/coverage_planner/coverage_planner.egg-info/requires.txt
+[2.355s] writing top-level names to ../../build/coverage_planner/coverage_planner.egg-info/top_level.txt
+[2.437s] reading manifest file '../../build/coverage_planner/coverage_planner.egg-info/SOURCES.txt'
+[2.440s] writing manifest file '../../build/coverage_planner/coverage_planner.egg-info/SOURCES.txt'
+[2.440s] running build
+[2.440s] running build_py
+[2.440s] copying coverage_planner/__init__.py -> /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner
+[2.442s] copying coverage_planner/coverage_planner_node.py -> /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner
+[2.444s] running install
+[2.454s] running install_lib
+[2.494s] copying /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner/coverage_planner_node.py -> /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner
+[2.496s] byte-compiling /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner/coverage_planner_node.py to coverage_planner_node.cpython-310.pyc
+[2.499s] running install_data
+[2.500s] copying resource/coverage_planner -> /home/ahmad/coverage_ws/install/coverage_planner/share/ament_index/resource_index/packages
+[2.500s] running install_egg_info
+[2.548s] removing '/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner-0.0.1-py3.10.egg-info' (and everything under it)
+[2.549s] Copying ../../build/coverage_planner/coverage_planner.egg-info to /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner-0.0.1-py3.10.egg-info
+[2.551s] running install_scripts
+[2.658s] Installing coverage_planner_node script to /home/ahmad/coverage_ws/install/coverage_planner/lib/coverage_planner
+[2.658s] writing list of installed files to '/home/ahmad/coverage_ws/build/coverage_planner/install.log'
+[2.718s] Invoked command in '/home/ahmad/coverage_ws/src/coverage_planner' returned '0': PYTHONPATH=/home/ahmad/coverage_ws/build/coverage_planner/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/coverage_planner build --build-base /home/ahmad/coverage_ws/build/coverage_planner/build install --record /home/ahmad/coverage_ws/build/coverage_planner/install.log --install-scripts $base/lib/coverage_planner --single-version-externally-managed install_data

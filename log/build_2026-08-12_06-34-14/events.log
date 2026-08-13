@@ -1,0 +1,98 @@
+[0.000000] (-) TimerEvent: {}
+[0.002720] (coverage_planner) JobQueued: {'identifier': 'coverage_planner', 'dependencies': OrderedDict()}
+[0.002811] (coverage_planner) JobStarted: {'identifier': 'coverage_planner'}
+[0.099470] (-) TimerEvent: {}
+[0.199825] (-) TimerEvent: {}
+[0.301154] (-) TimerEvent: {}
+[0.401989] (-) TimerEvent: {}
+[0.502878] (-) TimerEvent: {}
+[0.603516] (-) TimerEvent: {}
+[0.703902] (-) TimerEvent: {}
+[0.804183] (-) TimerEvent: {}
+[0.904517] (-) TimerEvent: {}
+[1.004948] (-) TimerEvent: {}
+[1.106251] (-) TimerEvent: {}
+[1.206712] (-) TimerEvent: {}
+[1.307961] (-) TimerEvent: {}
+[1.408427] (-) TimerEvent: {}
+[1.508688] (-) TimerEvent: {}
+[1.610910] (-) TimerEvent: {}
+[1.645263] (coverage_planner) Command: {'cmd': ['/usr/bin/python3', '-W', 'ignore:setup.py install is deprecated', '-W', 'ignore:easy_install command is deprecated', 'setup.py', 'egg_info', '--egg-base', '../../build/coverage_planner', 'build', '--build-base', '/home/ahmad/coverage_ws/build/coverage_planner/build', 'install', '--record', '/home/ahmad/coverage_ws/build/coverage_planner/install.log', '--install-scripts', '$base/lib/coverage_planner', '--single-version-externally-managed', 'install_data'], 'cwd': '/home/ahmad/coverage_ws/src/coverage_planner', 'env': {'GZ_SIM_SYSTEM_PLUGIN_PATH': '/home/ahmad/ardupilot_gazebo/build:/home/ahmad/ardupilot_gazebo/build:/home/ahmad/ardupilot_gazebo/build:', 'LESSOPEN': '| /usr/bin/lesspipe %s', 'GZ_SIM_RESOURCE_PATH': '/home/ahmad/ardupilot_gazebo/models:/home/ahmad/ardupilot_gazebo/worlds:/home/ahmad/ardupilot_gazebo/models:/home/ahmad/ardupilot_gazebo/worlds:/home/ahmad/ardupilot_gazebo/models:/home/ahmad/ardupilot_gazebo/worlds:', 'USER': 'ahmad', 'XDG_SESSION_TYPE': 'wayland', 'SHLVL': '1', 'LD_LIBRARY_PATH': '/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib', 'HOME': '/home/ahmad', 'OLDPWD': '/home/ahmad/coverage_ws/src', 'DESKTOP_SESSION': 'ubuntu', 'ROS_PYTHON_VERSION': '3', 'GNOME_SHELL_SESSION_MODE': 'ubuntu', 'GTK_MODULES': 'gail:atk-bridge', 'SYSTEMD_EXEC_PID': '3657', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus', 'COLORTERM': 'truecolor', 'IM_CONFIG_PHASE': '1', 'WAYLAND_DISPLAY': 'wayland-0', 'COLCON_PREFIX_PATH': '/home/ahmad/coverage_ws/install', 'ROS_DISTRO': 'humble', 'LOGNAME': 'ahmad', '_': '/usr/bin/colcon', 'ROS_VERSION': '2', 'XDG_SESSION_CLASS': 'user', 'USERNAME': 'ahmad', 'TERM': 'xterm-256color', 'GNOME_DESKTOP_SESSION_ID': 'this-is-deprecated', 'ROS_LOCALHOST_ONLY': '0', 'PATH': '/home/ahmad/.local/bin:/home/ahmad/.local/bin:/home/ahmad/coverage_ws/install/coverage_planner/bin:/home/ahmad/.local/bin:/opt/ros/humble/bin:/usr/lib/ccache:/home/ahmad/ardupilot/Tools/autotest:/opt/gcc-arm-none-eabi-10-2020-q4-major/bin:/home/ahmad/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin', 'SESSION_MANAGER': 'local/ahmad:@/tmp/.ICE-unix/1508,unix/ahmad:/tmp/.ICE-unix/1508', 'XDG_MENU_PREFIX': 'gnome-', 'GNOME_TERMINAL_SCREEN': '/org/gnome/Terminal/screen/fce1a1f5_9d12_405a_a8eb_91fad1547d33', 'GNOME_SETUP_DISPLAY': ':1', 'XDG_RUNTIME_DIR': '/run/user/1000', 'DISPLAY': ':0', 'LANG': 'en_US.UTF-8', 'XDG_CURRENT_DESKTOP': 'ubuntu:GNOME', 'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp', 'XMODIFIERS': '@im=ibus', 'XDG_SESSION_DESKTOP': 'ubuntu', 'XAUTHORITY': '/run/user/1000/.mutter-Xwaylandauth.HIQ1T3', 'LS_COLORS': 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:', 'GNOME_TERMINAL_SERVICE': ':1.115', 'SSH_AGENT_LAUNCHER': 'gnome-keyring', 'SSH_AUTH_SOCK': '/run/user/1000/keyring/ssh', 'ROS_DOMAIN_ID': '20', 'AMENT_PREFIX_PATH': '/home/ahmad/coverage_ws/install/coverage_planner:/opt/ros/humble', 'SHELL': '/bin/bash', 'QT_ACCESSIBILITY': '1', 'GDMSESSION': 'ubuntu', 'LESSCLOSE': '/usr/bin/lesspipe %s %s', 'GZ_VERSION': 'harmonic', 'QT_IM_MODULE': 'ibus', 'PWD': '/home/ahmad/coverage_ws/build/coverage_planner', 'LC_ALL': 'en_US.UTF-8', 'XDG_CONFIG_DIRS': '/etc/xdg/xdg-ubuntu:/etc/xdg', 'XDG_DATA_DIRS': '/usr/share/ubuntu:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop', 'PYTHONPATH': '/home/ahmad/coverage_ws/build/coverage_planner/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages:/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages', 'COLCON': '1', 'VTE_VERSION': '6800'}, 'shell': False}
+[1.711059] (-) TimerEvent: {}
+[1.813696] (-) TimerEvent: {}
+[1.914469] (-) TimerEvent: {}
+[2.014873] (-) TimerEvent: {}
+[2.019601] (coverage_planner) StderrLine: {'line': b"/home/ahmad/.local/lib/python3.10/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'script-dir' in 'develop' (setup.cfg), please use the underscore name 'script_dir' instead.\n"}
+[2.019844] (coverage_planner) StderrLine: {'line': b'!!\n'}
+[2.019964] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.020050] (coverage_planner) StderrLine: {'line': b'        ********************************************************************************\n'}
+[2.020142] (coverage_planner) StderrLine: {'line': b"        Usage of dash-separated 'script-dir' will not be supported in future\n"}
+[2.020224] (coverage_planner) StderrLine: {'line': b"        versions. Please use the underscore name 'script_dir' instead.\n"}
+[2.020306] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.020385] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.020462] (coverage_planner) StderrLine: {'line': b'        Available configuration options are listed in:\n'}
+[2.020665] (coverage_planner) StderrLine: {'line': b'        https://setuptools.pypa.io/en/latest/userguide/declarative_config.html\n'}
+[2.020801] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.020944] (coverage_planner) StderrLine: {'line': b'        This deprecation is overdue, please update your project and remove deprecated\n'}
+[2.021059] (coverage_planner) StderrLine: {'line': b'        calls to avoid build errors in the future.\n'}
+[2.021140] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.021219] (coverage_planner) StderrLine: {'line': b'        See https://github.com/pypa/setuptools/discussions/5011 for details.\n'}
+[2.021297] (coverage_planner) StderrLine: {'line': b'        ********************************************************************************\n'}
+[2.021376] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.021453] (coverage_planner) StderrLine: {'line': b'!!\n'}
+[2.021531] (coverage_planner) StderrLine: {'line': b'  opt = self._enforce_underscore(opt, section)\n'}
+[2.068983] (coverage_planner) StderrLine: {'line': b"/home/ahmad/.local/lib/python3.10/site-packages/setuptools/_distutils/dist.py:288: UserWarning: Unknown distribution option: 'tests_require'\n"}
+[2.069349] (coverage_planner) StderrLine: {'line': b'  warnings.warn(msg)\n'}
+[2.114994] (-) TimerEvent: {}
+[2.156906] (coverage_planner) StderrLine: {'line': b"/home/ahmad/.local/lib/python3.10/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'script-dir' in 'develop' (setup.cfg), please use the underscore name 'script_dir' instead.\n"}
+[2.157212] (coverage_planner) StderrLine: {'line': b'!!\n'}
+[2.157423] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.157634] (coverage_planner) StderrLine: {'line': b'        ********************************************************************************\n'}
+[2.157909] (coverage_planner) StderrLine: {'line': b"        Usage of dash-separated 'script-dir' will not be supported in future\n"}
+[2.158146] (coverage_planner) StderrLine: {'line': b"        versions. Please use the underscore name 'script_dir' instead.\n"}
+[2.158342] (coverage_planner) StderrLine: {'line': b'        (Affected: coverage_planner).\n'}
+[2.158535] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.158769] (coverage_planner) StderrLine: {'line': b'        Available configuration options are listed in:\n'}
+[2.159049] (coverage_planner) StderrLine: {'line': b'        https://setuptools.pypa.io/en/latest/userguide/declarative_config.html\n'}
+[2.159275] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.159470] (coverage_planner) StderrLine: {'line': b'        This deprecation is overdue, please update your project and remove deprecated\n'}
+[2.159684] (coverage_planner) StderrLine: {'line': b'        calls to avoid build errors in the future.\n'}
+[2.159896] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.160191] (coverage_planner) StderrLine: {'line': b'        See https://github.com/pypa/setuptools/discussions/5011 for details.\n'}
+[2.160451] (coverage_planner) StderrLine: {'line': b'        ********************************************************************************\n'}
+[2.160766] (coverage_planner) StderrLine: {'line': b'\n'}
+[2.161037] (coverage_planner) StderrLine: {'line': b'!!\n'}
+[2.161272] (coverage_planner) StderrLine: {'line': b'  opt = self._enforce_underscore(opt, section)\n'}
+[2.215087] (-) TimerEvent: {}
+[2.316966] (coverage_planner) StdoutLine: {'line': b'running egg_info\n'}
+[2.317308] (-) TimerEvent: {}
+[2.356123] (coverage_planner) StdoutLine: {'line': b'writing ../../build/coverage_planner/coverage_planner.egg-info/PKG-INFO\n'}
+[2.356480] (coverage_planner) StdoutLine: {'line': b'writing dependency_links to ../../build/coverage_planner/coverage_planner.egg-info/dependency_links.txt\n'}
+[2.356786] (coverage_planner) StdoutLine: {'line': b'writing entry points to ../../build/coverage_planner/coverage_planner.egg-info/entry_points.txt\n'}
+[2.357175] (coverage_planner) StdoutLine: {'line': b'writing requirements to ../../build/coverage_planner/coverage_planner.egg-info/requires.txt\n'}
+[2.357375] (coverage_planner) StdoutLine: {'line': b'writing top-level names to ../../build/coverage_planner/coverage_planner.egg-info/top_level.txt\n'}
+[2.417766] (-) TimerEvent: {}
+[2.440066] (coverage_planner) StdoutLine: {'line': b"reading manifest file '../../build/coverage_planner/coverage_planner.egg-info/SOURCES.txt'\n"}
+[2.442383] (coverage_planner) StdoutLine: {'line': b"writing manifest file '../../build/coverage_planner/coverage_planner.egg-info/SOURCES.txt'\n"}
+[2.442793] (coverage_planner) StdoutLine: {'line': b'running build\n'}
+[2.442986] (coverage_planner) StdoutLine: {'line': b'running build_py\n'}
+[2.443210] (coverage_planner) StdoutLine: {'line': b'copying coverage_planner/__init__.py -> /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner\n'}
+[2.444630] (coverage_planner) StdoutLine: {'line': b'copying coverage_planner/coverage_planner_node.py -> /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner\n'}
+[2.446398] (coverage_planner) StdoutLine: {'line': b'running install\n'}
+[2.456344] (coverage_planner) StdoutLine: {'line': b'running install_lib\n'}
+[2.496931] (coverage_planner) StdoutLine: {'line': b'copying /home/ahmad/coverage_ws/build/coverage_planner/build/lib/coverage_planner/coverage_planner_node.py -> /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner\n'}
+[2.498424] (coverage_planner) StdoutLine: {'line': b'byte-compiling /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner/coverage_planner_node.py to coverage_planner_node.cpython-310.pyc\n'}
+[2.501751] (coverage_planner) StdoutLine: {'line': b'running install_data\n'}
+[2.502284] (coverage_planner) StdoutLine: {'line': b'copying resource/coverage_planner -> /home/ahmad/coverage_ws/install/coverage_planner/share/ament_index/resource_index/packages\n'}
+[2.502909] (coverage_planner) StdoutLine: {'line': b'running install_egg_info\n'}
+[2.517918] (-) TimerEvent: {}
+[2.550957] (coverage_planner) StdoutLine: {'line': b"removing '/home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner-0.0.1-py3.10.egg-info' (and everything under it)\n"}
+[2.551576] (coverage_planner) StdoutLine: {'line': b'Copying ../../build/coverage_planner/coverage_planner.egg-info to /home/ahmad/coverage_ws/install/coverage_planner/lib/python3.10/site-packages/coverage_planner-0.0.1-py3.10.egg-info\n'}
+[2.553728] (coverage_planner) StdoutLine: {'line': b'running install_scripts\n'}
+[2.618718] (-) TimerEvent: {}
+[2.660323] (coverage_planner) StdoutLine: {'line': b'Installing coverage_planner_node script to /home/ahmad/coverage_ws/install/coverage_planner/lib/coverage_planner\n'}
+[2.661005] (coverage_planner) StdoutLine: {'line': b"writing list of installed files to '/home/ahmad/coverage_ws/build/coverage_planner/install.log'\n"}
+[2.718827] (-) TimerEvent: {}
+[2.720939] (coverage_planner) CommandEnded: {'returncode': 0}
+[2.745004] (coverage_planner) JobEnded: {'identifier': 'coverage_planner', 'rc': 0}
+[2.746447] (-) EventReactorShutdown: {}

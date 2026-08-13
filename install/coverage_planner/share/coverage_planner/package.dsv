@@ -1,0 +1,6 @@
+source;share/coverage_planner/hook/pythonpath.ps1
+source;share/coverage_planner/hook/pythonpath.dsv
+source;share/coverage_planner/hook/pythonpath.sh
+source;share/coverage_planner/hook/ament_prefix_path.ps1
+source;share/coverage_planner/hook/ament_prefix_path.dsv
+source;share/coverage_planner/hook/ament_prefix_path.sh

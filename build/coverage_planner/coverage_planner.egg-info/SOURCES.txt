@@ -1,0 +1,14 @@
+package.xml
+setup.cfg
+setup.py
+../../build/coverage_planner/coverage_planner.egg-info/PKG-INFO
+../../build/coverage_planner/coverage_planner.egg-info/SOURCES.txt
+../../build/coverage_planner/coverage_planner.egg-info/dependency_links.txt
+../../build/coverage_planner/coverage_planner.egg-info/entry_points.txt
+../../build/coverage_planner/coverage_planner.egg-info/requires.txt
+../../build/coverage_planner/coverage_planner.egg-info/top_level.txt
+../../build/coverage_planner/coverage_planner.egg-info/zip-safe
+coverage_planner/__init__.py
+coverage_planner/bcd_coverage_node.py
+coverage_planner/coverage_planner_node.py
+resource/coverage_planner
