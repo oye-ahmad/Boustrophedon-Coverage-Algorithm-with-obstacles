@@ -10,5 +10,6 @@ setup.py
 ../../build/coverage_planner/coverage_planner.egg-info/zip-safe
 coverage_planner/__init__.py
 coverage_planner/bcd_coverage_node.py
+coverage_planner/bcd_geometric_planner.py
 coverage_planner/coverage_planner_node.py
 resource/coverage_planner

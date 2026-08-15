@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'coverage_planner_node = coverage_planner.coverage_planner_node:main',
             'bcd_coverage_node = coverage_planner.bcd_coverage_node:main',
+            'bcd_geometric_node = coverage_planner.bcd_geometric_planner:main'
         ],
     },
 )

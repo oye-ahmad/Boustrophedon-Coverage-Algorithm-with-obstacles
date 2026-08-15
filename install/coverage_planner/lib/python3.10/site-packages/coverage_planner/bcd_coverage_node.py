@@ -76,8 +76,11 @@ class BCDCoverageNode(Node):
         self.altitude_m = self.get_parameter('altitude_m').value
         self.waypoint_file = self.get_parameter('waypoint_file').value
 
-        map_qos = QoSProfile(depth=1)
-        map_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        # Define QoS profile with Transient Local durability
+        map_qos = QoSProfile(
+            depth=10,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
+        )
 
         self._map_received = False
         self._last_path = None
@@ -87,8 +90,10 @@ class BCDCoverageNode(Node):
 
         self.path_pub = self.create_publisher(
             Path, self.get_parameter('output_path_topic').value, map_qos)
+        
+        # FIX: Change 10 to map_qos so RViz2 receives the markers
         self.cell_pub = self.create_publisher(
-            MarkerArray, self.get_parameter('cell_marker_topic').value, 10)
+            MarkerArray, self.get_parameter('cell_marker_topic').value, map_qos)
 
         self.create_timer(2.0, self.republish)
 

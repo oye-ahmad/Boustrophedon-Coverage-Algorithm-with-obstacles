@@ -1,3 +1,4 @@
 [console_scripts]
 bcd_coverage_node = coverage_planner.bcd_coverage_node:main
+bcd_geometric_node = coverage_planner.bcd_geometric_planner:main
 coverage_planner_node = coverage_planner.coverage_planner_node:main
