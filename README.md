@@ -546,19 +546,7 @@ The final report should replace the "To be recorded" fields with measurements fr
 
 The expected final plot should look conceptually like:
 
-```text
-North (m)
-  ^
-  |
-  |   Planned
-  |   ────────────────
-  |                  │
-  |   ────────────────
-  |   │
-  |   ────────────────
-  |
-  +----------------------------> East (m)
-```
+<img width="1279" height="1048" alt="planned_vs_actual" src="https://github.com/user-attachments/assets/66e87b5b-8bc5-4311-9d44-d92b49d56629" />
 
 The planned trajectory represents the output of the BCD planner, while the actual trajectory represents the UAV's recorded GPS motion.
 
