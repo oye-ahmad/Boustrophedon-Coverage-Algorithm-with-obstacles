@@ -1,4 +1,3 @@
-Here is the Graph of the Path of BCD Algorithm
 
 **BCD Geometric-Based**
 
