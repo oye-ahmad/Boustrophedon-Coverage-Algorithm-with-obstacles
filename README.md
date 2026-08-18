@@ -1043,3 +1043,5 @@ The repository currently contains the `src` components for the coverage planner,
 4. The project's path-plotting component converts the actual GPS trajectory to local East-North coordinates and generates the planned-versus-actual coverage plot.
 
 5. Fields2Cover provides an example of modern coverage-planning systems combining decomposition, route optimization, and coverage planning, illustrating directions for future optimization work.
+
+Now this same concept will be applied to multiple UAVs
