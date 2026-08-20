@@ -6,7 +6,6 @@ import threading
 
 import rclpy
 from rclpy.node import Node
-
 from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
@@ -15,7 +14,6 @@ from rclpy.qos import (
 )
 
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from sensor_msgs.msg import NavSatFix
 from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
 
@@ -23,7 +21,6 @@ from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
 class MultiDroneFormation(Node):
 
     def __init__(self):
-
         super().__init__('multi_drone_formation_controller')
 
         # ============================================================
@@ -49,59 +46,57 @@ class MultiDroneFormation(Node):
         self.hold_time = 10.0
 
         # ------------------------------------------------------------
-        # COLLISION AVOIDANCE
+        # COLLISION PARAMETERS
         # ------------------------------------------------------------
 
-        # Hard minimum separation.
+        # Desired minimum separation
         self.min_distance = 5.0
 
-        # Start avoiding before reaching minimum distance.
+        # Start avoidance before reaching minimum separation
         self.avoidance_distance = 7.0
 
-        # Emergency distance.
+        # Emergency separation
         self.emergency_distance = 4.5
 
+        # Maximum lateral avoidance speed
         self.max_avoidance_speed = 1.5
 
+        # Maximum total velocity
         self.max_velocity = 2.0
-
-        # ------------------------------------------------------------
-        # POSITION PARAMETERS
-        # ------------------------------------------------------------
-
-        self.position_tolerance = 0.5
 
         # ------------------------------------------------------------
         # CONTROL
         # ------------------------------------------------------------
 
+        self.position_tolerance = 0.5
+
         self.control_rate = 20.0
+
+        self.connection_timeout = 60.0
+
+        self.position_timeout = 30.0
 
         # ============================================================
         # STATE
         # ============================================================
 
         self.states = {}
-
-        # Local position
         self.positions = {}
-
-        # GPS position
-        self.global_positions = {}
-
-        # Reference GPS position
-        self.reference_lat = None
-        self.reference_lon = None
-
         self.home_positions = {}
 
-        self.armed = {}
+        self.global_positions = {}
+
         self.connected = {}
+        self.armed = {}
 
         self.velocity_publishers = {}
 
         self.arm_clients = {}
+
+        # IMPORTANT:
+        # MAVROS 2 service is /droneX/set_mode
         self.mode_clients = {}
+
         self.takeoff_clients = {}
         self.land_clients = {}
 
@@ -113,34 +108,30 @@ class MultiDroneFormation(Node):
         self.stop_requested = False
 
         # ============================================================
-        # MAVROS QoS
+        # QoS
         # ============================================================
 
-        # IMPORTANT:
+        # MAVROS local_position/pose uses BEST_EFFORT.
         #
-        # MAVROS position publishers commonly use BEST_EFFORT.
-        #
-        # A default ROS2 subscription is RELIABLE.
-        #
-        # RELIABLE subscriber + BEST_EFFORT publisher
-        # causes:
+        # The previous controller used default RELIABLE QoS and
+        # therefore received:
         #
         # "offering incompatible QoS"
         #
-        # Therefore explicitly use BEST_EFFORT.
+        # Use BEST_EFFORT to match MAVROS.
 
         mavros_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
             reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
         )
 
         state_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
             reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
         )
 
         # ============================================================
@@ -157,12 +148,12 @@ class MultiDroneFormation(Node):
 
             self.home_positions[drone] = None
 
-            self.armed[drone] = False
-
             self.connected[drone] = False
 
+            self.armed[drone] = False
+
             # --------------------------------------------------------
-            # STATE
+            # MAVROS STATE
             # --------------------------------------------------------
 
             self.create_subscription(
@@ -186,8 +177,14 @@ class MultiDroneFormation(Node):
             )
 
             # --------------------------------------------------------
-            # GLOBAL GPS POSITION
+            # GLOBAL POSITION
             # --------------------------------------------------------
+
+            # We keep this for monitoring/logging.
+            #
+            # Collision avoidance itself uses local ENU position.
+
+            from sensor_msgs.msg import NavSatFix
 
             self.create_subscription(
                 NavSatFix,
@@ -198,7 +195,7 @@ class MultiDroneFormation(Node):
             )
 
             # --------------------------------------------------------
-            # VELOCITY COMMAND
+            # VELOCITY PUBLISHER
             # --------------------------------------------------------
 
             self.velocity_publishers[drone] = self.create_publisher(
@@ -218,11 +215,19 @@ class MultiDroneFormation(Node):
 
             # --------------------------------------------------------
             # MODE
+            #
+            # IMPORTANT:
+            #
+            # Correct:
+            # /drone1/set_mode
+            #
+            # NOT:
+            # /drone1/cmd/set_mode
             # --------------------------------------------------------
 
             self.mode_clients[drone] = self.create_client(
                 SetMode,
-                f'/{drone}/cmd/set_mode'
+                f'/{drone}/set_mode'
             )
 
             # --------------------------------------------------------
@@ -244,7 +249,7 @@ class MultiDroneFormation(Node):
             )
 
         # ============================================================
-        # CONTROL TIMER
+        # TIMER
         # ============================================================
 
         self.timer = self.create_timer(
@@ -253,7 +258,7 @@ class MultiDroneFormation(Node):
         )
 
         # ============================================================
-        # LOGGING
+        # LOG CONFIGURATION
         # ============================================================
 
         self.get_logger().info(
@@ -308,8 +313,8 @@ class MultiDroneFormation(Node):
         )
 
         self.get_logger().info(
-            'Using GPS-based common coordinate system '
-            'for collision avoidance.'
+            'Using local ENU coordinates for '
+            'collision avoidance.'
         )
 
         self.get_logger().info(
@@ -330,7 +335,7 @@ class MultiDroneFormation(Node):
 
             self.armed[drone] = msg.armed
 
-    # ----------------------------------------------------------------
+    # ---------------------------------------------------------------
 
     def position_callback(self, msg, drone):
 
@@ -342,17 +347,9 @@ class MultiDroneFormation(Node):
                 msg.pose.position.z
             )
 
-    # ----------------------------------------------------------------
+    # ---------------------------------------------------------------
 
     def global_position_callback(self, msg, drone):
-
-        # Ignore invalid GPS.
-
-        if math.isnan(msg.latitude):
-            return
-
-        if math.isnan(msg.longitude):
-            return
 
         with self.lock:
 
@@ -363,7 +360,7 @@ class MultiDroneFormation(Node):
             )
 
     # ================================================================
-    # CONNECTION CHECKS
+    # CONNECTION
     # ================================================================
 
     def all_connected(self):
@@ -375,9 +372,9 @@ class MultiDroneFormation(Node):
                 for d in self.drone_names
             )
 
-    # ----------------------------------------------------------------
+    # ---------------------------------------------------------------
 
-    def all_have_local_positions(self):
+    def all_have_positions(self):
 
         with self.lock:
 
@@ -386,7 +383,7 @@ class MultiDroneFormation(Node):
                 for d in self.drone_names
             )
 
-    # ----------------------------------------------------------------
+    # ---------------------------------------------------------------
 
     def all_have_global_positions(self):
 
@@ -398,50 +395,188 @@ class MultiDroneFormation(Node):
             )
 
     # ================================================================
-    # SERVICE HELPERS
+    # WAIT HELPERS
     # ================================================================
 
-    def wait_future(self, future, timeout):
+    def wait_for_connections(self):
+
+        self.get_logger().info(
+            'Waiting for all three FCUs...'
+        )
 
         start = time.time()
 
         while rclpy.ok():
 
-            if future.done():
+            if self.stop_requested:
 
-                try:
-                    return future.result()
-                except Exception as e:
+                return False
+
+            if self.all_connected():
+
+                self.get_logger().info(
+                    'All three FCUs connected.'
+                )
+
+                return True
+
+            elapsed = time.time() - start
+
+            if elapsed > self.connection_timeout:
+
+                self.get_logger().error(
+                    'FCU connection timeout.'
+                )
+
+                for drone in self.drone_names:
+
+                    if not self.connected[drone]:
+
+                        self.get_logger().error(
+                            f'[{drone}] FCU NOT connected'
+                        )
+
+                return False
+
+            # Give executor time to process callbacks.
+            time.sleep(0.1)
+
+        return False
+
+    # ---------------------------------------------------------------
+
+    def wait_for_positions(self):
+
+        self.get_logger().info(
+            'Waiting for local positions...'
+        )
+
+        start = time.time()
+
+        while rclpy.ok():
+
+            if self.stop_requested:
+
+                return False
+
+            if self.all_have_positions():
+
+                self.get_logger().info(
+                    'Local position available '
+                    'for all drones.'
+                )
+
+                return True
+
+            if time.time() - start > self.position_timeout:
+
+                self.get_logger().error(
+                    'Local position timeout.'
+                )
+
+                for drone in self.drone_names:
+
+                    if self.positions[drone] is None:
+
+                        self.get_logger().error(
+                            f'[{drone}] local position unavailable'
+                        )
+
+                return False
+
+            time.sleep(0.1)
+
+        return False
+
+    # ---------------------------------------------------------------
+
+    def wait_for_global_positions(self):
+
+        self.get_logger().info(
+            'Waiting for global GPS positions...'
+        )
+
+        start = time.time()
+
+        while rclpy.ok():
+
+            if self.stop_requested:
+
+                return False
+
+            if self.all_have_global_positions():
+
+                self.get_logger().info(
+                    'Global GPS position available '
+                    'for all drones.'
+                )
+
+                return True
+
+            if time.time() - start > self.position_timeout:
+
+                self.get_logger().warn(
+                    'Global GPS position timeout.'
+                )
+
+                return False
+
+            time.sleep(0.1)
+
+        return False
+
+    # ================================================================
+    # SERVICE AVAILABILITY
+    # ================================================================
+
+    def wait_for_services(self):
+
+        self.get_logger().info(
+            'Checking MAVROS services...'
+        )
+
+        service_map = {
+            'arming': self.arm_clients,
+            'set_mode': self.mode_clients,
+            'takeoff': self.takeoff_clients,
+            'land': self.land_clients
+        }
+
+        for service_name, clients in service_map.items():
+
+            for drone in self.drone_names:
+
+                client = clients[drone]
+
+                if not client.wait_for_service(
+                    timeout_sec=10.0
+                ):
 
                     self.get_logger().error(
-                        f'Service exception: {e}'
+                        f'[{drone}] '
+                        f'{service_name} service unavailable'
                     )
 
-                    return None
+                    return False
 
-            if time.time() - start > timeout:
+                self.get_logger().info(
+                    f'[{drone}] '
+                    f'{service_name} service available'
+                )
 
-                return None
+        self.get_logger().info(
+            'All required MAVROS services are available.'
+        )
 
-            time.sleep(0.05)
+        return True
 
-        return None
-
-    # ----------------------------------------------------------------
+    # ================================================================
+    # ARM
+    # ================================================================
 
     def arm_drone(self, drone):
 
         client = self.arm_clients[drone]
-
-        if not client.wait_for_service(
-            timeout_sec=3.0
-        ):
-
-            self.get_logger().error(
-                f'[{drone}] arming service unavailable'
-            )
-
-            return False
 
         request = CommandBool.Request()
 
@@ -449,15 +584,30 @@ class MultiDroneFormation(Node):
 
         future = client.call_async(request)
 
-        result = self.wait_future(
-            future,
-            5.0
-        )
+        start = time.time()
+
+        while rclpy.ok():
+
+            if future.done():
+
+                break
+
+            if time.time() - start > 5.0:
+
+                self.get_logger().error(
+                    f'[{drone}] ARM timeout'
+                )
+
+                return False
+
+            time.sleep(0.05)
+
+        result = future.result()
 
         if result is None:
 
             self.get_logger().error(
-                f'[{drone}] ARM service failed'
+                f'[{drone}] ARM returned no result'
             )
 
             return False
@@ -477,20 +627,12 @@ class MultiDroneFormation(Node):
         return False
 
     # ================================================================
+    # GUIDED
+    # ================================================================
 
     def set_guided(self, drone):
 
         client = self.mode_clients[drone]
-
-        if not client.wait_for_service(
-            timeout_sec=3.0
-        ):
-
-            self.get_logger().error(
-                f'[{drone}] set_mode service unavailable'
-            )
-
-            return False
 
         request = SetMode.Request()
 
@@ -498,17 +640,36 @@ class MultiDroneFormation(Node):
 
         request.custom_mode = 'GUIDED'
 
+        self.get_logger().info(
+            f'[{drone}] Requesting GUIDED...'
+        )
+
         future = client.call_async(request)
 
-        result = self.wait_future(
-            future,
-            5.0
-        )
+        start = time.time()
+
+        while rclpy.ok():
+
+            if future.done():
+
+                break
+
+            if time.time() - start > 5.0:
+
+                self.get_logger().error(
+                    f'[{drone}] GUIDED request timeout'
+                )
+
+                return False
+
+            time.sleep(0.05)
+
+        result = future.result()
 
         if result is None:
 
             self.get_logger().error(
-                f'[{drone}] GUIDED request failed'
+                f'[{drone}] GUIDED returned no result'
             )
 
             return False
@@ -516,7 +677,7 @@ class MultiDroneFormation(Node):
         if result.mode_sent:
 
             self.get_logger().info(
-                f'[{drone}] GUIDED requested'
+                f'[{drone}] GUIDED command accepted'
             )
 
             return True
@@ -528,40 +689,55 @@ class MultiDroneFormation(Node):
         return False
 
     # ================================================================
+    # TAKEOFF
+    # ================================================================
 
     def takeoff_drone(self, drone):
 
         client = self.takeoff_clients[drone]
 
-        if not client.wait_for_service(
-            timeout_sec=3.0
-        ):
-
-            self.get_logger().error(
-                f'[{drone}] takeoff service unavailable'
-            )
-
-            return False
-
         request = CommandTOL.Request()
 
         request.min_pitch = 0.0
+
         request.yaw = 0.0
+
         request.latitude = 0.0
+
         request.longitude = 0.0
+
         request.altitude = self.takeoff_altitude
+
+        self.get_logger().info(
+            f'[{drone}] Requesting takeoff...'
+        )
 
         future = client.call_async(request)
 
-        result = self.wait_future(
-            future,
-            10.0
-        )
+        start = time.time()
+
+        while rclpy.ok():
+
+            if future.done():
+
+                break
+
+            if time.time() - start > 10.0:
+
+                self.get_logger().error(
+                    f'[{drone}] TAKEOFF timeout'
+                )
+
+                return False
+
+            time.sleep(0.05)
+
+        result = future.result()
 
         if result is None:
 
             self.get_logger().error(
-                f'[{drone}] takeoff service failed'
+                f'[{drone}] TAKEOFF returned no result'
             )
 
             return False
@@ -581,40 +757,55 @@ class MultiDroneFormation(Node):
         return False
 
     # ================================================================
+    # LAND
+    # ================================================================
 
     def land_drone(self, drone):
 
         client = self.land_clients[drone]
 
-        if not client.wait_for_service(
-            timeout_sec=3.0
-        ):
-
-            self.get_logger().error(
-                f'[{drone}] land service unavailable'
-            )
-
-            return False
-
         request = CommandTOL.Request()
 
         request.min_pitch = 0.0
+
         request.yaw = 0.0
+
         request.latitude = 0.0
+
         request.longitude = 0.0
+
         request.altitude = 0.0
+
+        self.get_logger().info(
+            f'[{drone}] Requesting LAND...'
+        )
 
         future = client.call_async(request)
 
-        result = self.wait_future(
-            future,
-            10.0
-        )
+        start = time.time()
+
+        while rclpy.ok():
+
+            if future.done():
+
+                break
+
+            if time.time() - start > 10.0:
+
+                self.get_logger().error(
+                    f'[{drone}] LAND timeout'
+                )
+
+                return False
+
+            time.sleep(0.05)
+
+        result = future.result()
 
         if result is None:
 
             self.get_logger().error(
-                f'[{drone}] LAND service failed'
+                f'[{drone}] LAND returned no result'
             )
 
             return False
@@ -634,91 +825,69 @@ class MultiDroneFormation(Node):
         return False
 
     # ================================================================
-    # GPS -> LOCAL COMMON COORDINATES
+    # VELOCITY
     # ================================================================
 
-    def set_reference_position(self):
+    def publish_velocity(
+        self,
+        drone,
+        vx,
+        vy,
+        vz=0.0
+    ):
 
-        if self.reference_lat is not None:
-            return
-
-        valid = [
-            self.global_positions[d]
-            for d in self.drone_names
-            if self.global_positions[d] is not None
-        ]
-
-        if not valid:
-            return
-
-        self.reference_lat = sum(
-            p[0] for p in valid
-        ) / len(valid)
-
-        self.reference_lon = sum(
-            p[1] for p in valid
-        ) / len(valid)
-
-        self.get_logger().info(
-            f'Common GPS reference: '
-            f'lat={self.reference_lat:.8f}, '
-            f'lon={self.reference_lon:.8f}'
+        speed = math.sqrt(
+            vx * vx +
+            vy * vy +
+            vz * vz
         )
 
-    # ----------------------------------------------------------------
+        if speed > self.max_velocity:
 
-    def gps_to_xy(self, lat, lon):
+            scale = self.max_velocity / speed
 
-        """
-        Convert GPS coordinates to local East/North meters.
+            vx *= scale
+            vy *= scale
+            vz *= scale
 
-        x = East
-        y = North
-        """
+        msg = TwistStamped()
 
-        if self.reference_lat is None:
-            return None
-
-        earth_radius = 6378137.0
-
-        dlat = math.radians(
-            lat - self.reference_lat
+        msg.header.stamp = (
+            self.get_clock().now().to_msg()
         )
 
-        dlon = math.radians(
-            lon - self.reference_lon
+        msg.twist.linear.x = float(vx)
+
+        msg.twist.linear.y = float(vy)
+
+        msg.twist.linear.z = float(vz)
+
+        msg.twist.angular.x = 0.0
+
+        msg.twist.angular.y = 0.0
+
+        msg.twist.angular.z = 0.0
+
+        self.velocity_publishers[drone].publish(msg)
+
+    # ---------------------------------------------------------------
+
+    def stop_drone(self, drone):
+
+        self.publish_velocity(
+            drone,
+            0.0,
+            0.0,
+            0.0
         )
 
-        ref_lat_rad = math.radians(
-            self.reference_lat
-        )
+    # ---------------------------------------------------------------
 
-        north = (
-            dlat *
-            earth_radius
-        )
+    def stop_all(self):
 
-        east = (
-            dlon *
-            earth_radius *
-            math.cos(ref_lat_rad)
-        )
+        for drone in self.drone_names:
 
-        return east, north
-
-    # ----------------------------------------------------------------
-
-    def get_common_position(self, drone):
-
-        gps = self.global_positions[drone]
-
-        if gps is None:
-            return None
-
-        return self.gps_to_xy(
-            gps[0],
-            gps[1]
-        )
+            self.stop_drone(drone)
 
     # ================================================================
     # DISTANCE
@@ -726,9 +895,9 @@ class MultiDroneFormation(Node):
 
     def distance_between(self, drone_a, drone_b):
 
-        pa = self.get_common_position(drone_a)
+        pa = self.positions[drone_a]
 
-        pb = self.get_common_position(drone_b)
+        pb = self.positions[drone_b]
 
         if pa is None or pb is None:
 
@@ -738,23 +907,27 @@ class MultiDroneFormation(Node):
 
         dy = pa[1] - pb[1]
 
+        dz = pa[2] - pb[2]
+
         return math.sqrt(
             dx * dx +
-            dy * dy
+            dy * dy +
+            dz * dz
         )
 
     # ================================================================
-    # FORMATION DISTANCES
+    # INITIAL FORMATION
     # ================================================================
 
-    def log_all_distances(self):
+    def print_initial_formation(self):
 
-        for i in range(
-            len(self.drone_names)
-        ):
+        self.get_logger().info(
+            'Initial formation:'
+        )
 
-            for j in range(i + 1,
-                           len(self.drone_names)):
+        for i in range(len(self.drone_names)):
+
+            for j in range(i + 1, len(self.drone_names)):
 
                 a = self.drone_names[i]
 
@@ -776,36 +949,26 @@ class MultiDroneFormation(Node):
 
     def calculate_avoidance(self, drone):
 
-        """
-        GPS-based repulsive collision avoidance.
-
-        The resulting vector is expressed in the same
-        East/North frame for all three vehicles.
-
-        Because the ArduPilot local frames in this SITL setup
-        are aligned with the common world frame, East is treated
-        as local X and North as local Y.
-        """
-
-        position = self.get_common_position(drone)
+        position = self.positions[drone]
 
         if position is None:
 
             return 0.0, 0.0
 
         avoid_x = 0.0
+
         avoid_y = 0.0
 
         for other in self.drone_names:
 
             if other == drone:
+
                 continue
 
-            other_position = (
-                self.get_common_position(other)
-            )
+            other_position = self.positions[other]
 
             if other_position is None:
+
                 continue
 
             dx = position[0] - other_position[0]
@@ -818,33 +981,36 @@ class MultiDroneFormation(Node):
             )
 
             # --------------------------------------------------------
-            # No avoidance required.
+            # No avoidance
             # --------------------------------------------------------
 
             if distance >= self.avoidance_distance:
+
                 continue
 
             if distance < 0.001:
 
                 continue
 
-            # Direction away from other drone.
+            # --------------------------------------------------------
+            # Direction AWAY from other drone
+            # --------------------------------------------------------
 
             ux = dx / distance
 
             uy = dy / distance
 
             # --------------------------------------------------------
-            # Repulsive strength.
+            # Avoidance strength
             #
-            # At 7 m  -> approximately 0
-            # At 5 m  -> strong
-            # Below 5 -> emergency strength
+            # 7m -> 0
+            # 5m -> strong
+            # <5m -> emergency
             # --------------------------------------------------------
 
             if distance >= self.min_distance:
 
-                strength = (
+                ratio = (
                     self.avoidance_distance - distance
                 ) / (
                     self.avoidance_distance -
@@ -853,31 +1019,22 @@ class MultiDroneFormation(Node):
 
                 strength = max(
                     0.0,
-                    min(1.0, strength)
+                    min(1.0, ratio)
                 )
 
             else:
-
-                # Strong emergency response.
 
                 emergency_ratio = (
                     self.min_distance - distance
                 ) / self.min_distance
 
                 strength = (
-                    0.8 +
-                    0.2 *
-                    emergency_ratio
+                    0.75 +
+                    0.25 * emergency_ratio
                 )
 
-                strength = min(
-                    1.0,
-                    strength
-                )
-
-                self.get_logger().error(
-                    f'[{drone}] EMERGENCY AVOIDANCE '
-                    f'from {other}: '
+                self.get_logger().warn(
+                    f'[{drone}] CLOSE TO {other}: '
                     f'{distance:.2f} m'
                 )
 
@@ -893,10 +1050,6 @@ class MultiDroneFormation(Node):
                 strength
             )
 
-        # ------------------------------------------------------------
-        # Limit avoidance velocity.
-        # ------------------------------------------------------------
-
         magnitude = math.sqrt(
             avoid_x * avoid_x +
             avoid_y * avoid_y
@@ -910,26 +1063,123 @@ class MultiDroneFormation(Node):
             )
 
             avoid_x *= scale
+
             avoid_y *= scale
 
         return avoid_x, avoid_y
 
     # ================================================================
-    # EMERGENCY SEPARATION
+    # FORMATION CONTROL
+    # ================================================================
+
+    def formation_velocity(self, drone):
+
+        forward_x = self.forward_speed
+
+        forward_y = 0.0
+
+        avoid_x, avoid_y = (
+            self.calculate_avoidance(drone)
+        )
+
+        # ------------------------------------------------------------
+        # Check nearest neighbor
+        # ------------------------------------------------------------
+
+        nearest_distance = float('inf')
+
+        for other in self.drone_names:
+
+            if other == drone:
+
+                continue
+
+            d = self.distance_between(
+                drone,
+                other
+            )
+
+            nearest_distance = min(
+                nearest_distance,
+                d
+            )
+
+        # ------------------------------------------------------------
+        # If inside emergency distance:
+        #
+        # Stop forward movement completely.
+        # Only separation velocity remains.
+        # ------------------------------------------------------------
+
+        if nearest_distance < self.emergency_distance:
+
+            self.get_logger().error(
+                f'[{drone}] EMERGENCY SEPARATION: '
+                f'{nearest_distance:.2f} m'
+            )
+
+            return (
+                avoid_x,
+                avoid_y
+            )
+
+        # ------------------------------------------------------------
+        # If inside minimum distance:
+        #
+        # Stop forward movement.
+        # Move away.
+        # ------------------------------------------------------------
+
+        if nearest_distance < self.min_distance:
+
+            return (
+                avoid_x,
+                avoid_y
+            )
+
+        # ------------------------------------------------------------
+        # If inside avoidance zone:
+        #
+        # Reduce forward speed.
+        # ------------------------------------------------------------
+
+        if nearest_distance < self.avoidance_distance:
+
+            ratio = (
+                nearest_distance -
+                self.min_distance
+            ) / (
+                self.avoidance_distance -
+                self.min_distance
+            )
+
+            ratio = max(
+                0.0,
+                min(1.0, ratio)
+            )
+
+            forward_x *= ratio
+
+        # ------------------------------------------------------------
+        # Normal formation flight
+        # ------------------------------------------------------------
+
+        return (
+            forward_x + avoid_x,
+            forward_y + avoid_y
+        )
+
+    # ================================================================
+    # EMERGENCY CHECK
     # ================================================================
 
     def emergency_separation_check(self):
 
         emergency = False
 
-        for i in range(
-            len(self.drone_names)
-        ):
+        for i in range(len(self.drone_names)):
 
-            for j in range(
-                i + 1,
-                len(self.drone_names)
-            ):
+            for j in range(i + 1, len(self.drone_names)):
 
                 a = self.drone_names[i]
 
@@ -943,21 +1193,9 @@ class MultiDroneFormation(Node):
                 if distance < self.emergency_distance:
 
                     self.get_logger().error(
-                        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-                    )
-
-                    self.get_logger().error(
-                        f'EMERGENCY SEPARATION: '
-                        f'{a} <-> {b} = '
+                        '!!! EMERGENCY SEPARATION !!! '
+                        f'{a} <-> {b}: '
                         f'{distance:.2f} m'
-                    )
-
-                    self.get_logger().error(
-                        'Applying maximum avoidance.'
-                    )
-
-                    self.get_logger().error(
-                        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
                     )
 
                     emergency = True
@@ -965,129 +1203,44 @@ class MultiDroneFormation(Node):
         return emergency
 
     # ================================================================
-    # VELOCITY COMMAND
-    # ================================================================
-
-    def publish_velocity(
-        self,
-        drone,
-        vx,
-        vy,
-        vz=0.0
-    ):
-
-        # ------------------------------------------------------------
-        # Limit total velocity.
-        # ------------------------------------------------------------
-
-        speed = math.sqrt(
-            vx * vx +
-            vy * vy +
-            vz * vz
-        )
-
-        if speed > self.max_velocity:
-
-            scale = (
-                self.max_velocity /
-                speed
-            )
-
-            vx *= scale
-            vy *= scale
-            vz *= scale
-
-        msg = TwistStamped()
-
-        msg.header.stamp = (
-            self.get_clock()
-            .now()
-            .to_msg()
-        )
-
-        msg.twist.linear.x = vx
-
-        msg.twist.linear.y = vy
-
-        msg.twist.linear.z = vz
-
-        msg.twist.angular.x = 0.0
-        msg.twist.angular.y = 0.0
-        msg.twist.angular.z = 0.0
-
-        self.velocity_publishers[
-            drone
-        ].publish(msg)
-
-    # ----------------------------------------------------------------
-
-    def stop_drone(self, drone):
-
-        self.publish_velocity(
-            drone,
-            0.0,
-            0.0,
-            0.0
-        )
-
-    # ----------------------------------------------------------------
-
-    def stop_all(self):
-
-        for drone in self.drone_names:
-
-            self.stop_drone(drone)
-
-    # ================================================================
-    # WAIT FOR ALTITUDE
+    # WAIT FOR TAKEOFF ALTITUDE
     # ================================================================
 
     def wait_for_altitude(self):
 
         self.get_logger().info(
             'Waiting for all drones to reach '
-            f'{self.takeoff_altitude:.1f} m...'
+            'takeoff altitude...'
         )
 
         start = time.time()
 
         while rclpy.ok():
 
-            if time.time() - start > 40.0:
-
-                self.get_logger().error(
-                    'Altitude timeout.'
-                )
+            if self.stop_requested:
 
                 return False
 
             reached = True
 
-            with self.lock:
-
-                positions_copy = dict(
-                    self.positions
-                )
-
             for drone in self.drone_names:
 
-                position = positions_copy[drone]
+                position = self.positions[drone]
 
                 if position is None:
 
                     reached = False
+
                     continue
 
-                # MAVROS ENU:
+                # MAVROS local ENU convention in this setup:
                 #
-                # z normally becomes positive upward.
+                # ground ≈ z 0
+                # flight altitude ≈ negative z
                 #
-                # We use absolute value to tolerate the
-                # current SITL configuration.
+                # Therefore use abs(z).
 
-                altitude = abs(
-                    position[2]
-                )
+                altitude = abs(position[2])
 
                 if altitude < (
                     self.takeoff_altitude -
@@ -1104,64 +1257,41 @@ class MultiDroneFormation(Node):
 
                 return True
 
+            if time.time() - start > 45.0:
+
+                self.get_logger().error(
+                    'Takeoff altitude timeout.'
+                )
+
+                return False
+
             time.sleep(0.1)
 
         return False
 
     # ================================================================
-    # FORWARD FLIGHT
+    # LAND ALL
     # ================================================================
 
-    def get_forward_distance(
-        self,
-        drone,
-        start_position
-    ):
+    def land_all(self):
 
-        current = self.get_common_position(
-            drone
+        self.get_logger().warn(
+            'Stopping velocity commands.'
         )
 
-        if current is None:
+        self.stop_all()
 
-            return 0.0
+        time.sleep(0.5)
 
-        dx = current[0] - start_position[0]
-
-        dy = current[1] - start_position[1]
-
-        return math.sqrt(
-            dx * dx +
-            dy * dy
+        self.get_logger().warn(
+            'Landing all drones...'
         )
 
-    # ----------------------------------------------------------------
+        for drone in self.drone_names:
 
-    def formation_velocity(self, drone):
+            self.land_drone(drone)
 
-        # ------------------------------------------------------------
-        # Normal forward velocity.
-        #
-        # Local X = forward.
-        # ------------------------------------------------------------
-
-        vx = self.forward_speed
-
-        vy = 0.0
-
-        # ------------------------------------------------------------
-        # Collision avoidance.
-        # ------------------------------------------------------------
-
-        avoid_x, avoid_y = (
-            self.calculate_avoidance(drone)
-        )
-
-        vx += avoid_x
-
-        vy += avoid_y
-
-        return vx, vy
+            time.sleep(0.5)
 
     # ================================================================
     # MISSION
@@ -1170,142 +1300,80 @@ class MultiDroneFormation(Node):
     def execute_mission(self):
 
         if self.mission_started:
+
             return
 
         self.mission_started = True
 
         # ============================================================
-        # WAIT FOR FCUs
+        # WAIT FOR CONNECTION
         # ============================================================
 
-        self.get_logger().info(
-            'Waiting for all three FCUs...'
-        )
+        if not self.wait_for_connections():
 
-        start_wait = time.time()
-
-        while rclpy.ok():
-
-            if self.all_connected():
-
-                break
-
-            if time.time() - start_wait > 60.0:
-
-                self.get_logger().error(
-                    'FCU connection timeout.'
-                )
-
-                return
-
-            time.sleep(0.1)
-
-        self.get_logger().info(
-            'All three FCUs connected.'
-        )
+            return
 
         # ============================================================
         # WAIT FOR LOCAL POSITION
         # ============================================================
 
-        self.get_logger().info(
-            'Waiting for local positions...'
-        )
-
-        start_wait = time.time()
-
-        while rclpy.ok():
-
-            if self.all_have_local_positions():
-
-                break
-
-            if time.time() - start_wait > 30.0:
-
-                self.get_logger().error(
-                    'Local position timeout.'
-                )
-
-                return
-
-            time.sleep(0.1)
-
-        self.get_logger().info(
-            'Local position available for all drones.'
-        )
-
-        # ============================================================
-        # WAIT FOR GLOBAL POSITION
-        # ============================================================
-
-        self.get_logger().info(
-            'Waiting for global GPS positions...'
-        )
-
-        start_wait = time.time()
-
-        while rclpy.ok():
-
-            if self.all_have_global_positions():
-
-                break
-
-            if time.time() - start_wait > 30.0:
-
-                self.get_logger().error(
-                    'GPS position timeout.'
-                )
-
-                return
-
-            time.sleep(0.1)
-
-        self.get_logger().info(
-            'Global GPS position available for all drones.'
-        )
-
-        # ============================================================
-        # COMMON REFERENCE
-        # ============================================================
-
-        self.set_reference_position()
-
-        if self.reference_lat is None:
-
-            self.get_logger().error(
-                'Could not establish common GPS reference.'
-            )
+        if not self.wait_for_positions():
 
             return
 
         # ============================================================
-        # INITIAL POSITIONS
+        # GPS
         # ============================================================
 
-        self.get_logger().info(
-            'Initial formation:'
-        )
-
-        self.log_all_distances()
+        self.wait_for_global_positions()
 
         # ============================================================
-        # SAFETY CHECK
+        # SAVE INITIAL POSITIONS
         # ============================================================
+
+        with self.lock:
+
+            for drone in self.drone_names:
+
+                self.home_positions[drone] = (
+                    self.positions[drone]
+                )
+
+        # ============================================================
+        # INITIAL FORMATION
+        # ============================================================
+
+        self.print_initial_formation()
+
+        # We tolerate tiny SITL numerical differences.
+        #
+        # Example:
+        # 4.99 m is effectively 5.0 m.
+        #
+        # We only abort if clearly below emergency distance.
 
         if self.emergency_separation_check():
 
             self.get_logger().error(
-                'Initial separation is too small.'
-            )
-
-            self.get_logger().error(
-                'Mission ABORTED.'
+                'Initial formation is unsafe.'
             )
 
             return
 
         # ============================================================
-        # SET GUIDED
+        # MAVROS SERVICES
+        # ============================================================
+
+        if not self.wait_for_services():
+
+            self.get_logger().error(
+                'Required MAVROS services are unavailable.'
+            )
+
+            return
+
+        # ============================================================
+        # GUIDED
         # ============================================================
 
         self.get_logger().info(
@@ -1320,6 +1388,8 @@ class MultiDroneFormation(Node):
                     f'GUIDED failed for {drone}.'
                 )
 
+                self.stop_all()
+
                 self.land_all()
 
                 return
@@ -1331,7 +1401,7 @@ class MultiDroneFormation(Node):
         # ============================================================
 
         self.get_logger().info(
-            'Arming all three drones...'
+            'Arming all drones...'
         )
 
         for drone in self.drone_names:
@@ -1341,6 +1411,8 @@ class MultiDroneFormation(Node):
                 self.get_logger().error(
                     f'ARM failed for {drone}.'
                 )
+
+                self.stop_all()
 
                 self.land_all()
 
@@ -1377,7 +1449,7 @@ class MultiDroneFormation(Node):
         if not self.wait_for_altitude():
 
             self.get_logger().error(
-                'Takeoff altitude not reached.'
+                'Takeoff altitude was not reached.'
             )
 
             self.land_all()
@@ -1385,60 +1457,43 @@ class MultiDroneFormation(Node):
             return
 
         # ============================================================
-        # RECORD START POSITIONS
+        # FORMATION FLIGHT
         # ============================================================
+
+        self.get_logger().info(
+            '===================================================='
+        )
+
+        self.get_logger().info(
+            '          FORMATION FLIGHT STARTED'
+        )
+
+        self.get_logger().info(
+            '===================================================='
+        )
 
         start_positions = {}
 
-        for drone in self.drone_names:
+        with self.lock:
 
-            start_positions[drone] = (
-                self.get_common_position(drone)
-            )
+            for drone in self.drone_names:
 
-        self.get_logger().info(
-            'Takeoff successful.'
-        )
-
-        self.log_all_distances()
-
-        # ============================================================
-        # FORWARD MISSION
-        # ============================================================
-
-        self.get_logger().info(
-            '===================================================='
-        )
-
-        self.get_logger().info(
-            '             FORMATION FLIGHT'
-        )
-
-        self.get_logger().info(
-            '===================================================='
-        )
-
-        self.get_logger().info(
-            f'Flying forward approximately '
-            f'{self.forward_distance:.1f} m.'
-        )
-
-        self.get_logger().info(
-            f'Normal speed: '
-            f'{self.forward_speed:.1f} m/s.'
-        )
+                start_positions[drone] = (
+                    self.positions[drone]
+                )
 
         mission_start = time.time()
 
-        last_distance_log = 0.0
+        last_log = time.time()
 
         while rclpy.ok():
 
             if self.stop_requested:
+
                 break
 
             # --------------------------------------------------------
-            # Check progress
+            # Check forward distance
             # --------------------------------------------------------
 
             all_finished = True
@@ -1447,23 +1502,24 @@ class MultiDroneFormation(Node):
 
                 start = start_positions[drone]
 
-                if start is None:
+                current = self.positions[drone]
+
+                if current is None:
 
                     all_finished = False
 
                     continue
 
-                distance_forward = (
-                    self.get_forward_distance(
-                        drone,
-                        start
-                    )
+                dx = current[0] - start[0]
+
+                dy = current[1] - start[1]
+
+                forward_distance = math.sqrt(
+                    dx * dx +
+                    dy * dy
                 )
 
-                if (
-                    distance_forward <
-                    self.forward_distance
-                ):
+                if forward_distance < self.forward_distance:
 
                     all_finished = False
 
@@ -1475,30 +1531,17 @@ class MultiDroneFormation(Node):
             # Collision avoidance
             # --------------------------------------------------------
 
-            emergency = (
-                self.emergency_separation_check()
-            )
+            self.emergency_separation_check()
 
             # --------------------------------------------------------
-            # Send commands
+            # Publish velocity to every drone
             # --------------------------------------------------------
 
             for drone in self.drone_names:
 
-                vx, vy = (
-                    self.formation_velocity(
-                        drone
-                    )
+                vx, vy = self.formation_velocity(
+                    drone
                 )
-
-                # If emergency condition exists,
-                # normal forward motion is reduced.
-                #
-                # This gives the repulsive component priority.
-
-                if emergency:
-
-                    vx *= 0.25
 
                 self.publish_velocity(
                     drone,
@@ -1511,49 +1554,73 @@ class MultiDroneFormation(Node):
             # Periodic status
             # --------------------------------------------------------
 
-            now = time.time()
+            if time.time() - last_log > 2.0:
 
-            if now - last_distance_log > 2.0:
+                d12 = self.distance_between(
+                    'drone1',
+                    'drone2'
+                )
 
-                self.log_all_distances()
+                d13 = self.distance_between(
+                    'drone1',
+                    'drone3'
+                )
 
-                last_distance_log = now
+                d23 = self.distance_between(
+                    'drone2',
+                    'drone3'
+                )
+
+                self.get_logger().info(
+                    f'Separation: '
+                    f'D1-D2={d12:.2f} m | '
+                    f'D1-D3={d13:.2f} m | '
+                    f'D2-D3={d23:.2f} m'
+                )
+
+                last_log = time.time()
 
             time.sleep(
                 1.0 / self.control_rate
             )
 
         # ============================================================
-        # STOP
+        # HOLD
         # ============================================================
 
         self.stop_all()
 
         self.get_logger().info(
-            'Forward flight complete.'
+            '===================================================='
         )
 
-        # ============================================================
-        # HOLD
-        # ============================================================
+        self.get_logger().info(
+            'Forward mission complete.'
+        )
 
         self.get_logger().info(
-            f'Holding for '
-            f'{self.hold_time:.1f} seconds...'
+            f'Holding for {self.hold_time:.1f} seconds.'
+        )
+
+        self.get_logger().info(
+            '===================================================='
         )
 
         hold_start = time.time()
 
         while rclpy.ok():
 
-            if (
-                time.time() -
-                hold_start
-            ) >= self.hold_time:
+            if self.stop_requested:
 
                 break
 
-            # Keep sending zero velocity.
+            elapsed = time.time() - hold_start
+
+            if elapsed >= self.hold_time:
+
+                break
+
+            # Zero velocity = hold.
 
             for drone in self.drone_names:
 
@@ -1568,13 +1635,13 @@ class MultiDroneFormation(Node):
                 1.0 / self.control_rate
             )
 
-        self.get_logger().info(
-            '10-second hold complete.'
-        )
-
         # ============================================================
         # LAND
         # ============================================================
+
+        self.get_logger().info(
+            '10-second hold complete.'
+        )
 
         self.land_all()
 
@@ -1593,44 +1660,21 @@ class MultiDroneFormation(Node):
         )
 
     # ================================================================
-    # LAND ALL
-    # ================================================================
-
-    def land_all(self):
-
-        self.get_logger().warn(
-            'Stopping velocity commands.'
-        )
-
-        self.stop_all()
-
-        time.sleep(0.5)
-
-        self.get_logger().warn(
-            'Landing all drones...'
-        )
-
-        for drone in self.drone_names:
-
-            self.land_drone(drone)
-
-            time.sleep(0.5)
-
-    # ================================================================
-    # CONTROL TIMER
+    # TIMER
     # ================================================================
 
     def control_loop(self):
 
-        if (
-            not self.mission_started
-            and not self.mission_finished
-        ):
+        if self.mission_started:
 
-            threading.Thread(
-                target=self.execute_mission,
-                daemon=True
-            ).start()
+            return
+
+        self.mission_started = True
+
+        threading.Thread(
+            target=self.execute_mission,
+            daemon=True
+        ).start()
 
 
 # ====================================================================
