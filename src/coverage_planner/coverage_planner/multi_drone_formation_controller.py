@@ -23,28 +23,32 @@ class MultiDroneFormation(Node):
 
         self.cb_group = ReentrantCallbackGroup()
 
+        # Drones setup
         self.drone_names = ['drone1', 'drone2', 'drone3']
 
+        # Flight parameters
         self.takeoff_altitude = 5.0
         self.forward_speed = 1.0
         self.forward_distance = 15.0
         self.hold_time = 10.0
 
-        self.min_distance = 5.0
-        self.avoidance_distance = 7.0
-        self.emergency_distance = 4.5
+        # Collision parameters (Meters)
+        self.min_distance = 4.0
+        self.avoidance_distance = 6.0
+        self.emergency_distance = 3.0
         self.max_avoidance_speed = 1.5
         self.max_velocity = 2.0
 
+        # Control tolerances
         self.position_tolerance = 0.5
         self.control_rate = 20.0
         self.connection_timeout = 60.0
         self.position_timeout = 30.0
 
+        # State storage
         self.states = {}
         self.positions = {}
         self.global_positions = {}
-
         self.connected = {}
         self.armed = {}
 
@@ -129,7 +133,7 @@ class MultiDroneFormation(Node):
 
         self.get_logger().info('MULTI-DRONE FORMATION CONTROLLER INITIALIZED')
 
-    # Explicit Callback Handlers
+    # Callback Generators
     def make_state_cb(self, drone):
         def cb(msg):
             with self.lock:
@@ -150,7 +154,7 @@ class MultiDroneFormation(Node):
                 self.global_positions[drone] = (msg.latitude, msg.longitude, msg.altitude)
         return cb
 
-    # Distance Functions
+    # Math/Distance Helpers
     @staticmethod
     def haversine_distance(lat1, lon1, lat2, lon2):
         R = 6371000.0
@@ -176,7 +180,128 @@ class MultiDroneFormation(Node):
         dz = ga[2] - gb[2]
         return math.sqrt(h_dist**2 + dz**2)
 
-    # Mission Logic
+    # Service Helpers with explicit wait timeouts
+    def call_service_sync(self, client, request, timeout=5.0):
+        if not client.service_is_ready():
+            if not client.wait_for_service(timeout_sec=2.0):
+                return False
+        
+        future = client.call_async(request)
+        start_time = time.time()
+        
+        while rclpy.ok() and (time.time() - start_time < timeout):
+            if future.done():
+                try:
+                    return future.result()
+                except Exception as e:
+                    self.get_logger().error(f'Service call failed: {e}')
+                    return None
+            time.sleep(0.05)
+        return None
+
+    def set_guided(self, drone):
+        req = SetMode.Request()
+        req.base_mode = 0
+        
+        # Try GUIDED (ArduPilot) first, fall back to OFFBOARD (PX4)
+        for mode in ['GUIDED', 'OFFBOARD']:
+            req.custom_mode = mode
+            res = self.call_service_sync(self.mode_clients[drone], req)
+            if res and res.mode_sent:
+                self.get_logger().info(f'[{drone}] Set mode to {mode} successfully.')
+                return True
+        return False
+
+    def arm_drone(self, drone):
+        req = CommandBool.Request()
+        req.value = True
+        res = self.call_service_sync(self.arm_clients[drone], req)
+        return res is not None and res.success
+
+    def takeoff_drone(self, drone):
+        req = CommandTOL.Request()
+        req.altitude = self.takeoff_altitude
+        res = self.call_service_sync(self.takeoff_clients[drone], req, timeout=10.0)
+        return res is not None and res.success
+
+    def land_drone(self, drone):
+        req = CommandTOL.Request()
+        res = self.call_service_sync(self.land_clients[drone], req, timeout=10.0)
+        return res is not None and res.success
+
+    def publish_velocity(self, drone, vx, vy, vz=0.0):
+        speed = math.sqrt(vx**2 + vy**2 + vz**2)
+        if speed > self.max_velocity:
+            scale = self.max_velocity / speed
+            vx *= scale
+            vy *= scale
+            vz *= scale
+
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.twist.linear.x = float(vx)
+        msg.twist.linear.y = float(vy)
+        msg.twist.linear.z = float(vz)
+        self.velocity_publishers[drone].publish(msg)
+
+    def stop_all(self):
+        for drone in self.drone_names:
+            self.publish_velocity(drone, 0.0, 0.0, 0.0)
+
+    def land_all(self):
+        self.stop_all()
+        time.sleep(0.5)
+        self.get_logger().warn('Landing all drones...')
+        for drone in self.drone_names:
+            self.land_drone(drone)
+            time.sleep(0.5)
+
+    def calculate_avoidance(self, drone):
+        avoid_x, avoid_y = 0.0, 0.0
+        for other in self.drone_names:
+            if other == drone:
+                continue
+
+            dist = self.distance_between(drone, other)
+            if dist >= self.avoidance_distance or dist < 0.001:
+                continue
+
+            dx, dy = self.get_gps_offset_meters(drone, other)
+            ux, uy = dx / dist, dy / dist
+
+            if dist >= self.min_distance:
+                ratio = (self.avoidance_distance - dist) / (self.avoidance_distance - self.min_distance)
+                strength = max(0.0, min(1.0, ratio))
+            else:
+                emergency_ratio = (self.min_distance - dist) / self.min_distance
+                strength = 0.75 + 0.25 * emergency_ratio
+
+            avoid_x += ux * self.max_avoidance_speed * strength
+            avoid_y += uy * self.max_avoidance_speed * strength
+
+        mag = math.sqrt(avoid_x**2 + avoid_y**2)
+        if mag > self.max_avoidance_speed:
+            avoid_x = (avoid_x / mag) * self.max_avoidance_speed
+            avoid_y = (avoid_y / mag) * self.max_avoidance_speed
+
+        return avoid_x, avoid_y
+
+    def formation_velocity(self, drone):
+        forward_x, forward_y = self.forward_speed, 0.0
+        avoid_x, avoid_y = self.calculate_avoidance(drone)
+
+        nearest_dist = min([self.distance_between(drone, o) for o in self.drone_names if o != drone])
+
+        if nearest_dist < self.min_distance:
+            return avoid_x, avoid_y
+
+        if nearest_dist < self.avoidance_distance:
+            ratio = max(0.0, min(1.0, (nearest_dist - self.min_distance) / (self.avoidance_distance - self.min_distance)))
+            forward_x *= ratio
+
+        return forward_x + avoid_x, forward_y + avoid_y
+
+    # Mission Process
     def execute_mission(self):
         self.get_logger().info('Waiting for FCU connections...')
         start = time.time()
@@ -194,17 +319,92 @@ class MultiDroneFormation(Node):
         start = time.time()
         while rclpy.ok() and (time.time() - start < self.position_timeout):
             with self.lock:
-                if all(v is not None for v in self.global_positions.values()):
-                    self.get_logger().info('GPS Fix acquired for all drones.')
+                if all(v is not None for v in self.global_positions.values()) and all(p is not None for p in self.positions.values()):
+                    self.get_logger().info('GPS Fix & Local Pose acquired for all drones.')
                     break
             time.sleep(0.2)
 
+        # Print Initial Formations
         for i in range(len(self.drone_names)):
             for j in range(i + 1, len(self.drone_names)):
                 a, b = self.drone_names[i], self.drone_names[j]
                 self.get_logger().info(f'Distance {a} <-> {b}: {self.distance_between(a, b):.2f} m')
 
-        self.get_logger().info('Mission initialized. Ready for commands.')
+        # Mode Setup
+        self.get_logger().info('Setting mode (GUIDED/OFFBOARD) for all drones...')
+        for d in self.drone_names:
+            if not self.set_guided(d):
+                self.get_logger().error(f'Failed to set flight mode for {d}')
+                return
+            time.sleep(0.3)
+
+        # Arming
+        self.get_logger().info('Arming all drones...')
+        for d in self.drone_names:
+            if not self.arm_drone(d):
+                self.get_logger().error(f'Failed to ARM {d}')
+                return
+            time.sleep(0.3)
+
+        # Takeoff
+        self.get_logger().info('Initiating Takeoff...')
+        for d in self.drone_names:
+            if not self.takeoff_drone(d):
+                self.get_logger().error(f'Takeoff failed for {d}')
+                self.land_all()
+                return
+            time.sleep(0.3)
+
+        # Wait for Altitude
+        self.get_logger().info('Reaching takeoff altitude...')
+        start = time.time()
+        while rclpy.ok() and (time.time() - start < 45.0):
+            if self.stop_requested:
+                return
+            reached = all([abs(self.positions[d][2]) >= (self.takeoff_altitude - self.position_tolerance) for d in self.drone_names])
+            if reached:
+                self.get_logger().info('All drones reached target altitude!')
+                break
+            time.sleep(0.2)
+
+        # Forward Mission Loop
+        self.get_logger().info('Starting Formation Forward Movement...')
+        start_positions = {d: self.positions[d] for d in self.drone_names}
+        last_log = time.time()
+
+        while rclpy.ok() and not self.stop_requested:
+            all_finished = True
+            for d in self.drone_names:
+                curr = self.positions[d]
+                start_p = start_positions[d]
+                fwd_dist = math.sqrt((curr[0] - start_p[0])**2 + (curr[1] - start_p[1])**2)
+                if fwd_dist < self.forward_distance:
+                    all_finished = False
+
+            if all_finished:
+                break
+
+            for d in self.drone_names:
+                vx, vy = self.formation_velocity(d)
+                self.publish_velocity(d, vx, vy, 0.0)
+
+            if time.time() - last_log > 2.0:
+                d12 = self.distance_between('drone1', 'drone2')
+                d23 = self.distance_between('drone2', 'drone3')
+                self.get_logger().info(f'Separation: D1-D2 = {d12:.2f}m | D2-D3 = {d23:.2f}m')
+                last_log = time.time()
+
+            time.sleep(1.0 / self.control_rate)
+
+        # Hold Logic
+        self.get_logger().info(f'Forward target reached. Holding position for {self.hold_time} seconds...')
+        hold_start = time.time()
+        while rclpy.ok() and (time.time() - hold_start < self.hold_time) and not self.stop_requested:
+            self.stop_all()
+            time.sleep(1.0 / self.control_rate)
+
+        self.get_logger().info('Mission Complete! Landing...')
+        self.land_all()
 
 def main(args=None):
     rclpy.init(args=args)
@@ -219,6 +419,7 @@ def main(args=None):
         executor.spin()
     except KeyboardInterrupt:
         node.stop_requested = True
+        node.land_all()
     finally:
         node.destroy_node()
         rclpy.shutdown()
