@@ -95,14 +95,16 @@ class MultiDroneFormation(Node):
         # QoS
         # ============================================================
 
-        mavros_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
+        # MAVROS state topics publish with TRANSIENT_LOCAL durability.
+        state_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
 
-        state_qos = QoSProfile(
+        # MAVROS sensor/position topics use BEST_EFFORT / VOLATILE.
+        mavros_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
@@ -126,7 +128,7 @@ class MultiDroneFormation(Node):
             self.create_subscription(
                 State,
                 f'/{drone}/state',
-                lambda msg, d=drone: self.state_callback(msg, d),
+                self.make_state_callback(drone),
                 state_qos,
                 callback_group=self.cb_group
             )
@@ -135,7 +137,7 @@ class MultiDroneFormation(Node):
             self.create_subscription(
                 PoseStamped,
                 f'/{drone}/local_position/pose',
-                lambda msg, d=drone: self.position_callback(msg, d),
+                self.make_position_callback(drone),
                 mavros_qos,
                 callback_group=self.cb_group
             )
@@ -144,7 +146,7 @@ class MultiDroneFormation(Node):
             self.create_subscription(
                 NavSatFix,
                 f'/{drone}/global_position/global',
-                lambda msg, d=drone: self.global_position_callback(msg, d),
+                self.make_global_position_callback(drone),
                 mavros_qos,
                 callback_group=self.cb_group
             )
@@ -203,8 +205,17 @@ class MultiDroneFormation(Node):
         threading.Thread(target=self.execute_mission, daemon=True).start()
 
     # ================================================================
-    # CALLBACKS
+    # CALLBACK HELPERS & CALLBACKS
     # ================================================================
+
+    def make_state_callback(self, drone):
+        return lambda msg: self.state_callback(msg, drone)
+
+    def make_position_callback(self, drone):
+        return lambda msg: self.position_callback(msg, drone)
+
+    def make_global_position_callback(self, drone):
+        return lambda msg: self.global_position_callback(msg, drone)
 
     def state_callback(self, msg, drone):
         with self.lock:
