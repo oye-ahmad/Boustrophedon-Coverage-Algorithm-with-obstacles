@@ -130,7 +130,19 @@ class MultiDroneFormation(Node):
                 StreamRate, f'/{drone}/set_stream_rate', callback_group=self.cb_group
             )
 
+        # Background stream maintainer to keep MAVLink connections alive
+        self.stream_timer = self.create_timer(0.05, self.stream_heartbeat_setpoints)
         self.get_logger().info('MULTI-DRONE FORMATION CONTROLLER INITIALIZED')
+
+    def stream_heartbeat_setpoints(self):
+        # Keeps streams warm while awaiting commands or mode changes
+        for drone in self.drone_names:
+            msg = TwistStamped()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.twist.linear.x = 0.0
+            msg.twist.linear.y = 0.0
+            msg.twist.linear.z = 0.0
+            self.velocity_publishers[drone].publish(msg)
 
     # Callback Generators
     def make_state_cb(self, drone):
@@ -183,6 +195,9 @@ class MultiDroneFormation(Node):
 
     # Service Caller
     def call_service_sync(self, client, request, timeout=3.0):
+        if not rclpy.ok():
+            return None
+
         if not client.service_is_ready():
             if not client.wait_for_service(timeout_sec=2.0):
                 return None
@@ -194,7 +209,8 @@ class MultiDroneFormation(Node):
             try:
                 response_container.append(future.result())
             except Exception as e:
-                self.get_logger().error(f'Service call failed: {e}')
+                if rclpy.ok():
+                    self.get_logger().error(f'Service call failed: {e}')
                 response_container.append(None)
             event.set()
 
@@ -216,10 +232,9 @@ class MultiDroneFormation(Node):
         req = SetMode.Request()
         req.base_mode = 0
 
-        # Numerical mode '4' works best natively in ArduPilot MAVROS
-        for mode in ['4', 'GUIDED']:
+        for mode in ['GUIDED', '4']:
             req.custom_mode = mode
-            res = self.call_service_sync(self.mode_clients[drone], req, timeout=2.0)
+            res = self.call_service_sync(self.mode_clients[drone], req, timeout=3.0)
             if res and res.mode_sent:
                 self.get_logger().info(f'[{drone}] Set mode to {mode} successfully.')
                 return True
@@ -228,8 +243,46 @@ class MultiDroneFormation(Node):
     def arm_drone(self, drone):
         req = CommandBool.Request()
         req.value = True
-        res = self.call_service_sync(self.arm_clients[drone], req, timeout=5.0)
-        return res is not None and res.success
+
+        res = self.call_service_sync(
+            self.arm_clients[drone],
+            req,
+            timeout=5.0
+        )
+
+        if res is None:
+            self.get_logger().warn(f'[{drone}] ARM service returned no response.')
+            return False
+
+        if not res.success:
+            self.get_logger().warn(f'[{drone}] ARM command was rejected.')
+            return False
+
+        self.get_logger().info(
+            f'[{drone}] ARM command accepted. Waiting for armed state...'
+        )
+
+        # Wait for MAVROS State topic to confirm armed=True
+        start = time.time()
+
+        while rclpy.ok() and (time.time() - start < 5.0):
+
+            with self.lock:
+                is_armed = self.armed[drone]
+
+            if is_armed:
+                self.get_logger().info(
+                    f'[{drone}] Armed state confirmed.'
+                )
+                return True
+
+            time.sleep(0.1)
+
+        self.get_logger().warn(
+            f'[{drone}] ARM command succeeded but armed state was not confirmed.'
+        )
+
+        return False
 
     def takeoff_drone(self, drone):
         req = CommandTOL.Request()
@@ -243,6 +296,9 @@ class MultiDroneFormation(Node):
         return res is not None and res.success
 
     def publish_velocity(self, drone, vx, vy, vz=0.0):
+        if not rclpy.ok():
+            return
+
         speed = math.sqrt(vx**2 + vy**2 + vz**2)
         if speed > self.max_velocity:
             scale = self.max_velocity / speed
@@ -264,10 +320,11 @@ class MultiDroneFormation(Node):
     def land_all(self):
         self.stop_all()
         time.sleep(0.5)
-        self.get_logger().warn('Landing all drones...')
-        for drone in self.drone_names:
-            self.land_drone(drone)
-            time.sleep(0.5)
+        if rclpy.ok():
+            self.get_logger().warn('Landing all drones...')
+            for drone in self.drone_names:
+                self.land_drone(drone)
+                time.sleep(0.5)
 
     def calculate_avoidance(self, drone):
         avoid_x, avoid_y = 0.0, 0.0
@@ -333,7 +390,8 @@ class MultiDroneFormation(Node):
 
             time.sleep(0.5)
         else:
-            self.get_logger().error('FCU Connection Timeout!')
+            if rclpy.ok():
+                self.get_logger().error('FCU Connection Timeout!')
             return
 
         # Request streams after verifying initial connection
@@ -354,38 +412,77 @@ class MultiDroneFormation(Node):
                 a, b = self.drone_names[i], self.drone_names[j]
                 self.get_logger().info(f'Distance {a} <-> {b}: {self.distance_between(a, b):.2f} m')
 
-        self.get_logger().info('Priming setpoint streams (30 stream bursts)...')
-        for _ in range(30):
-            self.stop_all()
-            time.sleep(0.05)
-
-        self.get_logger().info('Setting GUIDED mode for all drones...')
-        for d in self.drone_names:
-            if not self.set_guided(d):
-                self.get_logger().warn(f'Failed to set GUIDED for {d} pre-arm. Retrying after arming sequence...')
-
+        # STEP 1: ARM ALL DRONES FIRST (Required before setting GUIDED in ArduPilot)
+        # STEP 1: ARM ALL DRONES
         self.get_logger().info('Arming all drones...')
-        for d in self.drone_names:
-            if not self.arm_drone(d):
-                self.get_logger().error(f'Failed to ARM {d}')
-                return
-            time.sleep(0.3)
 
-        # Retry setting GUIDED if drone required arming first
-        self.get_logger().info('Verifying GUIDED mode post-arm...')
         for d in self.drone_names:
-            if self.states[d].mode not in ['GUIDED', 'CMODE(4)']:
-                if not self.set_guided(d):
-                    self.get_logger().error(f'Failed to set GUIDED mode post-arm for {d}')
+
+            armed_confirmed = False
+
+            for attempt in range(1, 6):
+
+                if self.stop_requested or not rclpy.ok():
                     return
 
+                with self.lock:
+                    if self.armed[d]:
+                        armed_confirmed = True
+                        break
+
+                self.get_logger().info(
+                    f'[{d}] Sending ARM command '
+                    f'(Attempt {attempt}/5)...'
+                )
+
+                if self.arm_drone(d):
+                    armed_confirmed = True
+                    break
+
+                time.sleep(1.0)
+
+            if not armed_confirmed:
+
+                with self.lock:
+                    actual_armed_state = self.armed[d]
+
+                self.get_logger().error(
+                    f'Failed to ARM {d}. '
+                    f'MAVROS armed state: {actual_armed_state}'
+                )
+
+                self.land_all()
+                return
+
+            self.get_logger().info(
+                f'[{d}] ARMING COMPLETE.'
+            )
+
+        # STEP 2: SWITCH TO GUIDED MODE POST-ARMING
+        self.get_logger().info('Setting GUIDED mode for all drones...')
+        for d in self.drone_names:
+            attempts = 0
+            while rclpy.ok() and self.states[d].mode not in ['GUIDED', 'CMODE(4)'] and attempts < 5:
+                if self.set_guided(d):
+                    break
+                attempts += 1
+                self.get_logger().warn(f'[{d}] Retrying GUIDED mode set... (Attempt {attempts})')
+                time.sleep(1.0)
+
+            if self.states[d].mode not in ['GUIDED', 'CMODE(4)']:
+                if rclpy.ok():
+                    self.get_logger().error(f'Failed to set GUIDED mode for {d}')
+                return
+
+        # STEP 3: TAKEOFF SEQUENCE
         self.get_logger().info('Initiating Takeoff...')
         for d in self.drone_names:
             if not self.takeoff_drone(d):
-                self.get_logger().error(f'Takeoff failed for {d}')
-                self.land_all()
+                if rclpy.ok():
+                    self.get_logger().error(f'Takeoff failed for {d}')
+                    self.land_all()
                 return
-            time.sleep(0.3)
+            time.sleep(0.5)
 
         self.get_logger().info('Reaching takeoff altitude...')
         start = time.time()
@@ -398,6 +495,7 @@ class MultiDroneFormation(Node):
                 break
             time.sleep(0.2)
 
+        # STEP 4: FORMATION FLIGHT
         self.get_logger().info('Starting Formation Forward Movement...')
         start_positions = {d: self.positions[d] for d in self.drone_names}
         last_log = time.time()
@@ -426,6 +524,7 @@ class MultiDroneFormation(Node):
 
             time.sleep(1.0 / self.control_rate)
 
+        # STEP 5: HOLD & LAND
         self.get_logger().info(f'Forward target reached. Holding position for {self.hold_time} seconds...')
         hold_start = time.time()
         while rclpy.ok() and (time.time() - hold_start < self.hold_time) and not self.stop_requested:
@@ -434,6 +533,7 @@ class MultiDroneFormation(Node):
 
         self.get_logger().info('Mission Complete! Landing...')
         self.land_all()
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -447,11 +547,13 @@ def main(args=None):
     try:
         executor.spin()
     except KeyboardInterrupt:
+        node.get_logger().info('KeyboardInterrupt received. Stopping execution...')
         node.stop_requested = True
-        node.land_all()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
