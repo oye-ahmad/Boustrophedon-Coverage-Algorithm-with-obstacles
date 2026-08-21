@@ -182,7 +182,7 @@ class MultiDroneFormation(Node):
         return math.sqrt(h_dist**2 + dz**2)
 
     # Service Caller
-    def call_service_sync(self, client, request, timeout=5.0):
+    def call_service_sync(self, client, request, timeout=3.0):
         if not client.service_is_ready():
             if not client.wait_for_service(timeout_sec=2.0):
                 return None
@@ -216,9 +216,10 @@ class MultiDroneFormation(Node):
         req = SetMode.Request()
         req.base_mode = 0
 
-        for mode in ['GUIDED', '4']:
+        # Numerical mode '4' works best natively in ArduPilot MAVROS
+        for mode in ['4', 'GUIDED']:
             req.custom_mode = mode
-            res = self.call_service_sync(self.mode_clients[drone], req, timeout=3.0)
+            res = self.call_service_sync(self.mode_clients[drone], req, timeout=2.0)
             if res and res.mode_sent:
                 self.get_logger().info(f'[{drone}] Set mode to {mode} successfully.')
                 return True
@@ -321,7 +322,6 @@ class MultiDroneFormation(Node):
 
         while rclpy.ok() and (time.time() - start < self.connection_timeout):
             with self.lock:
-                # Accept connection if currently connected or latched
                 if all(self.connected[d] or self.ever_connected[d] for d in self.drone_names):
                     self.get_logger().info('All FCUs confirmed connected!')
                     break
@@ -354,17 +354,15 @@ class MultiDroneFormation(Node):
                 a, b = self.drone_names[i], self.drone_names[j]
                 self.get_logger().info(f'Distance {a} <-> {b}: {self.distance_between(a, b):.2f} m')
 
-        self.get_logger().info('Priming setpoint streams...')
-        for _ in range(10):
+        self.get_logger().info('Priming setpoint streams (30 stream bursts)...')
+        for _ in range(30):
             self.stop_all()
             time.sleep(0.05)
 
         self.get_logger().info('Setting GUIDED mode for all drones...')
         for d in self.drone_names:
             if not self.set_guided(d):
-                self.get_logger().error(f'Failed to set flight mode for {d}')
-                return
-            time.sleep(0.3)
+                self.get_logger().warn(f'Failed to set GUIDED for {d} pre-arm. Retrying after arming sequence...')
 
         self.get_logger().info('Arming all drones...')
         for d in self.drone_names:
@@ -372,6 +370,14 @@ class MultiDroneFormation(Node):
                 self.get_logger().error(f'Failed to ARM {d}')
                 return
             time.sleep(0.3)
+
+        # Retry setting GUIDED if drone required arming first
+        self.get_logger().info('Verifying GUIDED mode post-arm...')
+        for d in self.drone_names:
+            if self.states[d].mode not in ['GUIDED', 'CMODE(4)']:
+                if not self.set_guided(d):
+                    self.get_logger().error(f'Failed to set GUIDED mode post-arm for {d}')
+                    return
 
         self.get_logger().info('Initiating Takeoff...')
         for d in self.drone_names:
