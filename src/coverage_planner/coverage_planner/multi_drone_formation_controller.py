@@ -12,7 +12,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, StreamRate
 from sensor_msgs.msg import NavSatFix
 
 
@@ -43,13 +43,14 @@ class MultiDroneFormation(Node):
         self.position_tolerance = 0.5
         self.control_rate = 20.0
         self.connection_timeout = 60.0
-        self.position_timeout = 30.0
+        self.position_timeout = 45.0
 
         # State storage
         self.states = {}
         self.positions = {}
         self.global_positions = {}
         self.connected = {}
+        self.ever_connected = {}
         self.armed = {}
 
         self.velocity_publishers = {}
@@ -57,18 +58,12 @@ class MultiDroneFormation(Node):
         self.mode_clients = {}
         self.takeoff_clients = {}
         self.land_clients = {}
+        self.stream_clients = {}
 
         self.lock = threading.Lock()
         self.stop_requested = False
 
-        # QoS configuration
-        state_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
-
+        # QoS configuration tailored for ArduPilot / MAVROS
         mavros_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -81,6 +76,7 @@ class MultiDroneFormation(Node):
             self.positions[drone] = None
             self.global_positions[drone] = None
             self.connected[drone] = False
+            self.ever_connected[drone] = False
             self.armed[drone] = False
 
             # STATE
@@ -88,7 +84,7 @@ class MultiDroneFormation(Node):
                 State,
                 f'/{drone}/state',
                 self.make_state_cb(drone),
-                state_qos,
+                mavros_qos,
                 callback_group=self.cb_group
             )
 
@@ -130,6 +126,9 @@ class MultiDroneFormation(Node):
             self.land_clients[drone] = self.create_client(
                 CommandTOL, f'/{drone}/cmd/land', callback_group=self.cb_group
             )
+            self.stream_clients[drone] = self.create_client(
+                StreamRate, f'/{drone}/set_stream_rate', callback_group=self.cb_group
+            )
 
         self.get_logger().info('MULTI-DRONE FORMATION CONTROLLER INITIALIZED')
 
@@ -139,6 +138,8 @@ class MultiDroneFormation(Node):
             with self.lock:
                 self.states[drone] = msg
                 self.connected[drone] = msg.connected
+                if msg.connected:
+                    self.ever_connected[drone] = True
                 self.armed[drone] = msg.armed
         return cb
 
@@ -180,33 +181,44 @@ class MultiDroneFormation(Node):
         dz = ga[2] - gb[2]
         return math.sqrt(h_dist**2 + dz**2)
 
-    # Service Helpers with explicit wait timeouts
+    # Service Caller
     def call_service_sync(self, client, request, timeout=5.0):
         if not client.service_is_ready():
             if not client.wait_for_service(timeout_sec=2.0):
-                return False
-        
+                return None
+
+        event = threading.Event()
+        response_container = []
+
+        def done_callback(future):
+            try:
+                response_container.append(future.result())
+            except Exception as e:
+                self.get_logger().error(f'Service call failed: {e}')
+                response_container.append(None)
+            event.set()
+
         future = client.call_async(request)
-        start_time = time.time()
-        
-        while rclpy.ok() and (time.time() - start_time < timeout):
-            if future.done():
-                try:
-                    return future.result()
-                except Exception as e:
-                    self.get_logger().error(f'Service call failed: {e}')
-                    return None
-            time.sleep(0.05)
+        future.add_done_callback(done_callback)
+
+        if event.wait(timeout=timeout):
+            return response_container[0]
         return None
+
+    def enable_ardu_streams(self, drone):
+        req = StreamRate.Request()
+        req.stream_id = 0
+        req.message_rate = 10
+        req.on_off = True
+        self.call_service_sync(self.stream_clients[drone], req, timeout=2.0)
 
     def set_guided(self, drone):
         req = SetMode.Request()
         req.base_mode = 0
-        
-        # Try GUIDED (ArduPilot) first, fall back to OFFBOARD (PX4)
-        for mode in ['GUIDED', 'OFFBOARD']:
+
+        for mode in ['GUIDED', '4']:
             req.custom_mode = mode
-            res = self.call_service_sync(self.mode_clients[drone], req)
+            res = self.call_service_sync(self.mode_clients[drone], req, timeout=3.0)
             if res and res.mode_sent:
                 self.get_logger().info(f'[{drone}] Set mode to {mode} successfully.')
                 return True
@@ -215,12 +227,12 @@ class MultiDroneFormation(Node):
     def arm_drone(self, drone):
         req = CommandBool.Request()
         req.value = True
-        res = self.call_service_sync(self.arm_clients[drone], req)
+        res = self.call_service_sync(self.arm_clients[drone], req, timeout=5.0)
         return res is not None and res.success
 
     def takeoff_drone(self, drone):
         req = CommandTOL.Request()
-        req.altitude = self.takeoff_altitude
+        req.altitude = float(self.takeoff_altitude)
         res = self.call_service_sync(self.takeoff_clients[drone], req, timeout=10.0)
         return res is not None and res.success
 
@@ -305,15 +317,28 @@ class MultiDroneFormation(Node):
     def execute_mission(self):
         self.get_logger().info('Waiting for FCU connections...')
         start = time.time()
+        last_log = time.time()
+
         while rclpy.ok() and (time.time() - start < self.connection_timeout):
             with self.lock:
-                if all(self.connected.values()):
-                    self.get_logger().info('All FCUs connected!')
+                # Accept connection if currently connected or latched
+                if all(self.connected[d] or self.ever_connected[d] for d in self.drone_names):
+                    self.get_logger().info('All FCUs confirmed connected!')
                     break
-            time.sleep(0.2)
+
+            if time.time() - last_log > 5.0:
+                status_str = ", ".join([f"{d}: {'OK' if (self.connected[d] or self.ever_connected[d]) else 'WAIT'}" for d in self.drone_names])
+                self.get_logger().info(f'Connection status -> {status_str}')
+                last_log = time.time()
+
+            time.sleep(0.5)
         else:
             self.get_logger().error('FCU Connection Timeout!')
             return
+
+        # Request streams after verifying initial connection
+        for d in self.drone_names:
+            self.enable_ardu_streams(d)
 
         self.get_logger().info('Waiting for GPS fixes...')
         start = time.time()
@@ -322,23 +347,25 @@ class MultiDroneFormation(Node):
                 if all(v is not None for v in self.global_positions.values()) and all(p is not None for p in self.positions.values()):
                     self.get_logger().info('GPS Fix & Local Pose acquired for all drones.')
                     break
-            time.sleep(0.2)
+            time.sleep(0.5)
 
-        # Print Initial Formations
         for i in range(len(self.drone_names)):
             for j in range(i + 1, len(self.drone_names)):
                 a, b = self.drone_names[i], self.drone_names[j]
                 self.get_logger().info(f'Distance {a} <-> {b}: {self.distance_between(a, b):.2f} m')
 
-        # Mode Setup
-        self.get_logger().info('Setting mode (GUIDED/OFFBOARD) for all drones...')
+        self.get_logger().info('Priming setpoint streams...')
+        for _ in range(10):
+            self.stop_all()
+            time.sleep(0.05)
+
+        self.get_logger().info('Setting GUIDED mode for all drones...')
         for d in self.drone_names:
             if not self.set_guided(d):
                 self.get_logger().error(f'Failed to set flight mode for {d}')
                 return
             time.sleep(0.3)
 
-        # Arming
         self.get_logger().info('Arming all drones...')
         for d in self.drone_names:
             if not self.arm_drone(d):
@@ -346,7 +373,6 @@ class MultiDroneFormation(Node):
                 return
             time.sleep(0.3)
 
-        # Takeoff
         self.get_logger().info('Initiating Takeoff...')
         for d in self.drone_names:
             if not self.takeoff_drone(d):
@@ -355,7 +381,6 @@ class MultiDroneFormation(Node):
                 return
             time.sleep(0.3)
 
-        # Wait for Altitude
         self.get_logger().info('Reaching takeoff altitude...')
         start = time.time()
         while rclpy.ok() and (time.time() - start < 45.0):
@@ -367,7 +392,6 @@ class MultiDroneFormation(Node):
                 break
             time.sleep(0.2)
 
-        # Forward Mission Loop
         self.get_logger().info('Starting Formation Forward Movement...')
         start_positions = {d: self.positions[d] for d in self.drone_names}
         last_log = time.time()
@@ -396,7 +420,6 @@ class MultiDroneFormation(Node):
 
             time.sleep(1.0 / self.control_rate)
 
-        # Hold Logic
         self.get_logger().info(f'Forward target reached. Holding position for {self.hold_time} seconds...')
         hold_start = time.time()
         while rclpy.ok() and (time.time() - hold_start < self.hold_time) and not self.stop_requested:
