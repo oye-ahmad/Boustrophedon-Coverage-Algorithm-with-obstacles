@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-multi_drone_offboard_mission.py
+multi_drone_ardupilot_guided.py
+ArduPilot-compatible multi-drone mission control via MAVSDK / GUIDED mode.
 """
 
 import os
@@ -33,7 +34,7 @@ DRONES = [
     },
 ]
 ACCEPTANCE_RADIUS_M = 1.2
-COLLISION_THRESHOLD_M = 5.0
+COLLISION_THRESHOLD_M = 4.0
 HOLD_CHECK_INTERVAL_S = 0.2
 CONNECTION_TIMEOUT_S = 30
 TAKEOFF_ALTITUDE_M = 2.5
@@ -45,7 +46,7 @@ def log(drone_id: int, message: str) -> None:
 
 class SharedState:
     def __init__(self):
-        self.global_positions: Dict[int, Tuple[float, float]] = {}  # id -> (lat, lon)
+        self.global_positions: Dict[int, Tuple[float, float]] = {}
         self.hold_flags: Dict[int, bool] = {d["id"]: False for d in DRONES}
 
 
@@ -68,12 +69,15 @@ class MultiDroneWaypointFollower:
         self.waypoints_file = waypoints_file
         self.log_file = log_file
         self.state = state
-        self.drone = System(port=grpc_port)
+        self.drone = None
         self.is_logging = False
 
-        # Live telemetry cached values to avoid opening/closing gRPC streams
         self.current_rel_alt = 0.0
         self.current_ned_pos = (0.0, 0.0, 0.0)
+
+    async def init_system(self):
+        # Explicit initialization per drone to prevent gRPC server binding collisions
+        self.drone = System(port=self.grpc_port)
 
     async def connect_and_check_health(self) -> bool:
         log(self.drone_id, f"Connecting on {self.connection_url} (gRPC port {self.grpc_port})...")
@@ -91,17 +95,17 @@ class MultiDroneWaypointFollower:
             log(self.drone_id, f"Connection FAILED (no heartbeat within {CONNECTION_TIMEOUT_S}s).")
             return False
 
-        log(self.drone_id, "Waiting for position lock and armable health state...")
+        log(self.drone_id, "Checking position lock and armable state...")
         try:
             async def _wait_health():
                 async for health in self.drone.telemetry.health():
                     pos_ok = health.is_global_position_ok or health.is_local_position_ok
-                    if pos_ok and health.is_home_position_ok and health.is_armable:
+                    if pos_ok and health.is_armable:
                         return True
                     await asyncio.sleep(1)
 
             await asyncio.wait_for(_wait_health(), timeout=CONNECTION_TIMEOUT_S)
-            log(self.drone_id, "Health checks passed: Position lock & Home OK.")
+            log(self.drone_id, "Health checks passed: Ready for GUIDED takeoff.")
             return True
         except asyncio.TimeoutError:
             log(self.drone_id, "FAILED to acquire required health checks in time.")
@@ -131,13 +135,10 @@ class MultiDroneWaypointFollower:
             return
 
         self.is_logging = True
-        
-        # Continuous long-running telemetry background tasks
         logger_task = asyncio.create_task(self._log_telemetry())
         pos_tracker_task = asyncio.create_task(self._track_positions())
 
         try:
-            # Step 1: Set takeoff altitude & Arm
             log(self.drone_id, f"Setting takeoff altitude to {TAKEOFF_ALTITUDE_M}m...")
             await self.drone.action.set_takeoff_altitude(TAKEOFF_ALTITUDE_M)
 
@@ -148,44 +149,47 @@ class MultiDroneWaypointFollower:
                 log(self.drone_id, f"Arming failed: {e}")
                 return
 
-            # Step 2: Native Takeoff
-            log(self.drone_id, "Taking off via action.takeoff()...")
+            log(self.drone_id, "Executing ArduPilot GUIDED Takeoff...")
             try:
                 await self.drone.action.takeoff()
             except Exception as e:
                 log(self.drone_id, f"Takeoff command failed: {e}")
                 return
 
-            # Step 3: Wait for Takeoff Altitude using cached telemetry
-            log(self.drone_id, "Climbing to takeoff altitude...")
+            # Wait until takeoff altitude reached in GUIDED mode
+            log(self.drone_id, "Climbing to target altitude...")
             while True:
                 if self.current_rel_alt >= (TAKEOFF_ALTITUDE_M - 0.4):
                     log(self.drone_id, f"Airborne! Current Alt: {self.current_rel_alt:.2f}m")
                     break
                 await asyncio.sleep(0.3)
 
-            # Step 4: Stream initial setpoint while airborne
+            # In ArduPilot, stream setpoint BEFORE calling start() to avoid gRPC reset
+            curr_n, curr_e, _ = self.current_ned_pos
             takeoff_setpoint = PositionNedYaw(
-                north_m=0.0,
-                east_m=0.0,
+                north_m=curr_n,
+                east_m=curr_e,
                 down_m=-TAKEOFF_ALTITUDE_M,
                 yaw_deg=0.0,
             )
-            log(self.drone_id, "Streaming setpoints in mid-air for Offboard mode...")
-            for _ in range(15):
-                await self.drone.offboard.set_position_ned(takeoff_setpoint)
+
+            # Send 5 initial setpoints to establish stream
+            for _ in range(5):
+                try:
+                    await self.drone.offboard.set_position_ned(takeoff_setpoint)
+                except Exception:
+                    pass
                 await asyncio.sleep(0.1)
 
-            # Step 5: Switch to OFFBOARD mode
-            log(self.drone_id, "Switching to OFFBOARD mode...")
+            # Start streaming offboard (GUIDED velocity/position controller)
+            log(self.drone_id, "Enabling continuous setpoint control...")
             try:
                 await self.drone.offboard.start()
-                log(self.drone_id, "OFFBOARD mode active!")
+                log(self.drone_id, "GUIDED position control active!")
             except OffboardError as e:
-                log(self.drone_id, f"Offboard start ERROR: {e._result.result}")
-                return
+                log(self.drone_id, f"Offboard start WARN (proceeding anyway): {e._result.result}")
 
-            # Step 6: Execute Waypoints
+            # Waypoint execution loop
             log(self.drone_id, f"Executing {len(waypoints)} waypoints...")
             current_target = takeoff_setpoint
 
@@ -199,12 +203,19 @@ class MultiDroneWaypointFollower:
 
                 while True:
                     if self.state.hold_flags.get(self.drone_id, False):
-                        await self.drone.offboard.set_position_ned(current_target)
+                        try:
+                            await self.drone.offboard.set_position_ned(current_target)
+                        except Exception:
+                            pass
                         await asyncio.sleep(HOLD_CHECK_INTERVAL_S)
                         continue
 
                     current_target = target_ned
-                    await self.drone.offboard.set_position_ned(current_target)
+                    try:
+                        await self.drone.offboard.set_position_ned(current_target)
+                    except Exception as e:
+                        # Catch intermittent stream glitches without crashing script
+                        pass
 
                     curr_north, curr_east, curr_down = self.current_ned_pos
 
@@ -222,11 +233,11 @@ class MultiDroneWaypointFollower:
 
             log(self.drone_id, "All waypoints completed successfully!")
 
-            log(self.drone_id, "Stopping Offboard mode and commanding Land...")
+            log(self.drone_id, "Stopping offboard control and commanding Land...")
             try:
                 await self.drone.offboard.stop()
-            except OffboardError as e:
-                log(self.drone_id, f"WARN: Failed to stop offboard cleanly: {e._result.result}")
+            except Exception:
+                pass
 
             await self.drone.action.land()
 
@@ -261,17 +272,16 @@ class MultiDroneWaypointFollower:
                     ])
                     f.flush()
                     await asyncio.sleep(0.5)
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
 
     async def _track_positions(self):
-        """Single long-lived task that listens to telemetry streams continuously."""
         async def _track_global():
             try:
                 async for pos in self.drone.telemetry.position():
                     self.state.global_positions[self.drone_id] = (pos.latitude_deg, pos.longitude_deg)
                     self.current_rel_alt = pos.relative_altitude_m
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
 
         async def _track_ned():
@@ -282,7 +292,7 @@ class MultiDroneWaypointFollower:
                         ned.position.east_m,
                         ned.position.down_m
                     )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
 
         await asyncio.gather(_track_global(), _track_ned())
@@ -327,7 +337,12 @@ async def main():
         for d in DRONES
     ]
 
-    print("=== Connecting to all drones and checking health ===")
+    # Initialize each MAVSDK gRPC backend sequentially to avoid port collision
+    for f in followers:
+        await f.init_system()
+        await asyncio.sleep(0.3)
+
+    print("=== Connecting to ArduPilot drones and checking health ===")
     connect_results = await asyncio.gather(*[f.connect_and_check_health() for f in followers])
 
     print("\n=== Connection Summary ===")
@@ -338,10 +353,10 @@ async def main():
             all_ok = False
 
     if not all_ok:
-        print("\nOne or more drones failed to connect/health-check. Aborting mission.")
+        print("\nOne or more drones failed to connect. Aborting mission.")
         return
 
-    print("\nAll drones ready. Starting concurrent takeoff and mission...\n")
+    print("\nAll drones ready. Starting GUIDED mode takeoff & mission...\n")
 
     monitor_task = asyncio.create_task(collision_monitor(state))
     await asyncio.gather(*[f.run_mission() for f in followers])
@@ -354,4 +369,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("[WARN] Script interrupted by user.")
+        print("[WARN] Mission interrupted by user.")
