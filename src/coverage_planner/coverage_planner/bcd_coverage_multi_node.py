@@ -87,35 +87,64 @@ def partition_cells(
 ) -> List[List[int]]:
     """
     Split ordered_ids into n_drones contiguous groups, balanced by total
-    path length. Returns a list of n_drones cell-id lists.
+    path length. Guarantees a more even split even with few cells.
     """
     if n_drones < 1:
         raise ValueError("n_drones must be >= 1")
     if not ordered_ids:
         return [[] for _ in range(n_drones)]
 
+    n_cells = len(ordered_ids)
+
+    # --- Case 1: fewer cells than drones → give one cell each, rest empty ---
+    if n_cells <= n_drones:
+        regions = [[cid] for cid in ordered_ids]
+        while len(regions) < n_drones:
+            regions.append([])
+        return regions
+
+    # --- Case 2: normal length-balanced contiguous split ---
     lengths = {cid: _path_length(cell_paths[cid]) for cid in ordered_ids}
     total_length = sum(lengths.values())
-    target_per_region = total_length / n_drones if total_length > 0 else 0
+    target = total_length / n_drones
 
     regions: List[List[int]] = []
     current: List[int] = []
-    running_total = 0.0
-    region_index = 0
+    running = 0.0
+    region_idx = 0
 
-    for cid in ordered_ids:
+    for i, cid in enumerate(ordered_ids):
         current.append(cid)
-        running_total += lengths[cid]
-        if (
-            region_index < n_drones - 1
-            and running_total >= target_per_region * (region_index + 1)
-        ):
+        running += lengths[cid]
+
+        # Decide whether to close the current region
+        remaining_cells = n_cells - (i + 1)
+        remaining_regions = n_drones - region_idx - 1
+
+        should_close = False
+        if region_idx < n_drones - 1:
+            # Close if we have reached the target AND we still have
+            # enough cells left for the remaining drones
+            if running >= target and remaining_cells >= remaining_regions:
+                should_close = True
+            # Also close if we would otherwise leave too few cells
+            # for the remaining drones
+            elif remaining_cells == remaining_regions:
+                should_close = True
+
+        if should_close:
             regions.append(current)
             current = []
-            region_index += 1
+            running = 0.0
+            region_idx += 1
+            # Recalculate remaining target for the next regions
+            if remaining_regions > 0:
+                target = (total_length - sum(lengths[c] for r in regions for c in r)) / remaining_regions
 
-    if current or len(regions) < n_drones:
+    if current:
         regions.append(current)
+
+    # Safety: pad if somehow short
     while len(regions) < n_drones:
         regions.append([])
 
