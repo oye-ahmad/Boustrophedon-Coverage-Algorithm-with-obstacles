@@ -86,71 +86,24 @@ def partition_cells(
     n_drones: int = 3,
 ) -> List[List[int]]:
     """
-    Assign cells to drones trying to balance total path length.
-    - If few cells → sort by length and give longest cells first (greedy).
-    - If many cells → still try contiguous split of the ordered sequence.
+    Simple contiguous split of the greedy sequence.
+    With few cells this keeps regions spatially separated
+    and greatly reduces path crossing in RViz.
     """
-    if n_drones < 1:
-        raise ValueError("n_drones must be >= 1")
     if not ordered_ids:
         return [[] for _ in range(n_drones)]
 
-    n_cells = len(ordered_ids)
-    lengths = {cid: _path_length(cell_paths[cid]) for cid in ordered_ids}
+    n = len(ordered_ids)
+    # split as evenly as possible
+    base = n // n_drones
+    rem  = n % n_drones
 
-    # ---------- Few cells: length-greedy assignment ----------
-    if n_cells <= n_drones * 2:
-        # Sort cells from longest to shortest
-        sorted_ids = sorted(ordered_ids, key=lambda cid: lengths[cid], reverse=True)
-
-        regions = [[] for _ in range(n_drones)]
-        region_lengths = [0.0] * n_drones
-
-        for cid in sorted_ids:
-            # Give the next cell to the currently shortest region
-            idx = region_lengths.index(min(region_lengths))
-            regions[idx].append(cid)
-            region_lengths[idx] += lengths[cid]
-
-        return regions
-
-    # ---------- Many cells: contiguous length-balanced split ----------
-    total_length = sum(lengths.values())
-    target = total_length / n_drones
-
-    regions: List[List[int]] = []
-    current: List[int] = []
-    running = 0.0
-    region_idx = 0
-
-    for i, cid in enumerate(ordered_ids):
-        current.append(cid)
-        running += lengths[cid]
-
-        remaining_cells = n_cells - (i + 1)
-        remaining_regions = n_drones - region_idx - 1
-
-        should_close = False
-        if region_idx < n_drones - 1:
-            if running >= target and remaining_cells >= remaining_regions:
-                should_close = True
-            elif remaining_cells == remaining_regions:
-                should_close = True
-
-        if should_close:
-            regions.append(current)
-            current = []
-            running = 0.0
-            region_idx += 1
-            if remaining_regions > 0:
-                already = sum(lengths[c] for r in regions for c in r)
-                target = (total_length - already) / remaining_regions
-
-    if current:
-        regions.append(current)
-
-    while len(regions) < n_drones:
-        regions.append([])
+    regions = []
+    idx = 0
+    for i in range(n_drones):
+        size = base + (1 if i < rem else 0)
+        regions.append(ordered_ids[idx : idx + size])
+        idx += size
 
     return regions
 
@@ -158,23 +111,19 @@ def stitch_region_path(
     region_cell_ids: List[int],
     cell_paths: Dict[int, List[Tuple[float, float]]],
 ) -> List[Tuple[float, float]]:
-    """
-    Concatenate a region's cell paths in order, inserting a straight-line
-    transition between the end of one cell and the start of the next.
-    """
     full_path: List[Tuple[float, float]] = []
     prev_end = None
     for cid in region_cell_ids:
-        path = cell_paths[cid]
+        path = cell_paths.get(cid, [])
         if not path:
             continue
         if prev_end is not None:
+            # only add the connecting segment if we really change cells
             full_path.append(prev_end)
             full_path.append(path[0])
         full_path.extend(path)
         prev_end = path[-1]
     return full_path
-
 
 def region_summary(
     regions: List[List[int]],
