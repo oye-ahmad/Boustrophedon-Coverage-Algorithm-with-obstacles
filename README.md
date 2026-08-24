@@ -7,6 +7,11 @@
 
 <img width="1279" height="1048" alt="planned_vs_actual" src="https://github.com/user-attachments/assets/66e87b5b-8bc5-4311-9d44-d92b49d56629" />
 
+**Multi UAVs BCD Coverage**
+
+<img width="1279" height="1048" alt="combined_planned_vs_actual" src="https://github.com/user-attachments/assets/6412641e-cb6e-4108-9710-bbf6a5eecbf6" />
+
+
 # Single-UAV Autonomous Coverage Using Boustrophedon Cellular Decomposition
 
 ## 1. Abstract
