@@ -41,20 +41,17 @@ from mavsdk.offboard import OffboardError, PositionNedYaw
 # ---- Configuration -----------------------------------------------------
 DRONES = [
     {
-        "id": 1, "port": 14550,
-        "grpc_port": 50051,
+        "id": 1, "port": 14550, "grpc_port": 50051,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone1.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone1.csv"),
     },
     {
-        "id": 2, "port": 14560,
-        "grpc_port": 50052,
+        "id": 2, "port": 14560, "grpc_port": 50052,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone2.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone2.csv"),
     },
     {
-        "id": 3, "port": 14570,
-        "grpc_port": 50053,
+        "id": 3, "port": 14570, "grpc_port": 50053,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone3.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone3.csv"),
     },
@@ -92,19 +89,25 @@ class MultiDroneWaypointFollower:
     steps mirror your original implementation as closely as possible.
     """
 
-    def __init__(self, drone_id: int, connection_url: str, waypoints_file: str,
-                 log_file: str, state: SharedState):
+    def __init__(self, drone_id: int, connection_url: str, grpc_port: int,
+                 waypoints_file: str, log_file: str, state: SharedState):
         self.drone_id = drone_id
         self.connection_url = connection_url
+        self.grpc_port = grpc_port
         self.waypoints_file = waypoints_file
         self.log_file = log_file
         self.state = state
-        self.drone = System()
+        # IMPORTANT: each System() spawns its own mavsdk_server backend,
+        # which defaults to gRPC port 50051 for EVERY instance. Without
+        # passing a distinct port here, all 3 System() objects collide -
+        # only the first binds successfully, so drones 2 and 3 either
+        # fail silently or end up talking to drone 1's backend.
+        self.drone = System(port=grpc_port)
         self.is_logging = False
 
     # ------------------------------------------------------------------
     async def connect_and_check_health(self) -> bool:
-        log(self.drone_id, f"Connecting on {self.connection_url}...")
+        log(self.drone_id, f"Connecting on {self.connection_url} (gRPC port {self.grpc_port})...")
         await self.drone.connect(system_address=self.connection_url)
 
         try:
@@ -308,6 +311,7 @@ async def main():
         MultiDroneWaypointFollower(
             drone_id=d["id"],
             connection_url=f"udp://:{d['port']}",
+            grpc_port=d["grpc_port"],
             waypoints_file=d["waypoints_file"],
             log_file=d["log_file"],
             state=state,
