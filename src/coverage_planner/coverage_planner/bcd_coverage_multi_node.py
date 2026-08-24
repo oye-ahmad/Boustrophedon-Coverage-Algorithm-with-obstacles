@@ -86,8 +86,9 @@ def partition_cells(
     n_drones: int = 3,
 ) -> List[List[int]]:
     """
-    Split ordered_ids into n_drones contiguous groups, balanced by total
-    path length. Guarantees a more even split even with few cells.
+    Assign cells to drones trying to balance total path length.
+    - If few cells → sort by length and give longest cells first (greedy).
+    - If many cells → still try contiguous split of the ordered sequence.
     """
     if n_drones < 1:
         raise ValueError("n_drones must be >= 1")
@@ -95,16 +96,25 @@ def partition_cells(
         return [[] for _ in range(n_drones)]
 
     n_cells = len(ordered_ids)
+    lengths = {cid: _path_length(cell_paths[cid]) for cid in ordered_ids}
 
-    # --- Case 1: fewer cells than drones → give one cell each, rest empty ---
-    if n_cells <= n_drones:
-        regions = [[cid] for cid in ordered_ids]
-        while len(regions) < n_drones:
-            regions.append([])
+    # ---------- Few cells: length-greedy assignment ----------
+    if n_cells <= n_drones * 2:
+        # Sort cells from longest to shortest
+        sorted_ids = sorted(ordered_ids, key=lambda cid: lengths[cid], reverse=True)
+
+        regions = [[] for _ in range(n_drones)]
+        region_lengths = [0.0] * n_drones
+
+        for cid in sorted_ids:
+            # Give the next cell to the currently shortest region
+            idx = region_lengths.index(min(region_lengths))
+            regions[idx].append(cid)
+            region_lengths[idx] += lengths[cid]
+
         return regions
 
-    # --- Case 2: normal length-balanced contiguous split ---
-    lengths = {cid: _path_length(cell_paths[cid]) for cid in ordered_ids}
+    # ---------- Many cells: contiguous length-balanced split ----------
     total_length = sum(lengths.values())
     target = total_length / n_drones
 
@@ -117,18 +127,13 @@ def partition_cells(
         current.append(cid)
         running += lengths[cid]
 
-        # Decide whether to close the current region
         remaining_cells = n_cells - (i + 1)
         remaining_regions = n_drones - region_idx - 1
 
         should_close = False
         if region_idx < n_drones - 1:
-            # Close if we have reached the target AND we still have
-            # enough cells left for the remaining drones
             if running >= target and remaining_cells >= remaining_regions:
                 should_close = True
-            # Also close if we would otherwise leave too few cells
-            # for the remaining drones
             elif remaining_cells == remaining_regions:
                 should_close = True
 
@@ -137,19 +142,17 @@ def partition_cells(
             current = []
             running = 0.0
             region_idx += 1
-            # Recalculate remaining target for the next regions
             if remaining_regions > 0:
-                target = (total_length - sum(lengths[c] for r in regions for c in r)) / remaining_regions
+                already = sum(lengths[c] for r in regions for c in r)
+                target = (total_length - already) / remaining_regions
 
     if current:
         regions.append(current)
 
-    # Safety: pad if somehow short
     while len(regions) < n_drones:
         regions.append([])
 
     return regions
-
 
 def stitch_region_path(
     region_cell_ids: List[int],
