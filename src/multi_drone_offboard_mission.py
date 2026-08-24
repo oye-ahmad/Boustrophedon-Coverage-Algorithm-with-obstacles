@@ -2,13 +2,7 @@
 """
 multi_drone_offboard_mission.py
 
-3-drone concurrent coverage mission with:
-  - distinct gRPC ports
-  - robust connection + health check
-  - GPS-based collision avoidance (haversine)
-  - local-NED offboard waypoint following (matches BCD CSV)
-  - 15 s grace period after takeoff before collision logic starts
-  - protected telemetry streams
+Robust 3-drone concurrent coverage mission.
 """
 
 import os
@@ -16,7 +10,7 @@ import csv
 import time
 import math
 import asyncio
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 from mavsdk import System
 from mavsdk.offboard import OffboardError, PositionNedYaw
@@ -51,7 +45,8 @@ ACCEPTANCE_RADIUS_M = 1.2
 COLLISION_THRESHOLD_M = 5.0
 HOLD_CHECK_INTERVAL_S = 1.0
 CONNECTION_TIMEOUT_S = 25
-COLLISION_GRACE_PERIOD_S = 15.0   # ignore collisions during takeoff
+COLLISION_GRACE_PERIOD_S = 15.0
+STAGGER_DELAY_S = 2.5          # delay between starting each drone
 
 
 def log(drone_id: int, message: str) -> None:
@@ -60,7 +55,7 @@ def log(drone_id: int, message: str) -> None:
 
 class SharedState:
     def __init__(self):
-        self.global_positions: Dict[int, Tuple[float, float]] = {}  # id -> (lat, lon)
+        self.global_positions: Dict[int, Tuple[float, float]] = {}
         self.hold_flags: Dict[int, bool] = {d["id"]: False for d in DRONES}
 
 
@@ -83,8 +78,6 @@ class MultiDroneWaypointFollower:
         self.waypoints_file = waypoints_file
         self.log_file = log_file
         self.state = state
-
-        # CRITICAL: each System must use a unique gRPC port
         self.drone = System(port=grpc_port)
         self.is_logging = False
 
@@ -103,20 +96,21 @@ class MultiDroneWaypointFollower:
             await asyncio.wait_for(_wait_connected(), timeout=CONNECTION_TIMEOUT_S)
             log(self.drone_id, "Connection SUCCESSFUL.")
         except asyncio.TimeoutError:
-            log(self.drone_id, f"Connection FAILED (timeout {CONNECTION_TIMEOUT_S}s).")
+            log(self.drone_id, "Connection FAILED (timeout).")
             return False
 
-        log(self.drone_id, "Waiting for global position lock...")
+        log(self.drone_id, "Waiting for vehicle to become armable...")
         try:
-            async def _wait_health():
+            async def _wait_armable():
                 async for h in self.drone.telemetry.health():
-                    if h.is_global_position_ok and h.is_home_position_ok:
+                    # We only require is_armable (home_position_ok is False in your SITL)
+                    if h.is_armable:
                         return True
-            await asyncio.wait_for(_wait_health(), timeout=CONNECTION_TIMEOUT_S)
-            log(self.drone_id, "Health OK – global position lock acquired.")
+            await asyncio.wait_for(_wait_armable(), timeout=CONNECTION_TIMEOUT_S)
+            log(self.drone_id, "Vehicle is armable – ready.")
             return True
         except asyncio.TimeoutError:
-            log(self.drone_id, "FAILED to acquire global position lock.")
+            log(self.drone_id, "FAILED: vehicle never became armable.")
             return False
 
     # ------------------------------------------------------------------
@@ -149,14 +143,24 @@ class MultiDroneWaypointFollower:
         tracker_task = asyncio.create_task(self._track_global_position())
 
         try:
+            # Extra settle time after health check
+            await asyncio.sleep(2.0)
+
             log(self.drone_id, "Arming...")
             await self.drone.action.arm()
+            await asyncio.sleep(2.0)
+
+            # Explicit takeoff altitude helps reliability
+            try:
+                await self.drone.action.set_takeoff_altitude(10.0)
+            except Exception:
+                pass
 
             log(self.drone_id, "Taking off...")
             await self.drone.action.takeoff()
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)          # let them climb
 
-            # Initial setpoint (required before offboard.start)
+            # Initial setpoint required before offboard.start()
             first = waypoints[0]
             await self.drone.offboard.set_position_ned(
                 PositionNedYaw(
@@ -178,7 +182,6 @@ class MultiDroneWaypointFollower:
             log(self.drone_id, f"Executing {len(waypoints)} waypoints...")
 
             for idx, wp in enumerate(waypoints):
-                # Respect collision hold
                 while self.state.hold_flags.get(self.drone_id, False):
                     await asyncio.sleep(HOLD_CHECK_INTERVAL_S)
 
@@ -190,7 +193,6 @@ class MultiDroneWaypointFollower:
                 )
                 await self.drone.offboard.set_position_ned(target)
 
-                # Wait until acceptance radius is reached
                 while True:
                     if self.state.hold_flags.get(self.drone_id, False):
                         await asyncio.sleep(HOLD_CHECK_INTERVAL_S)
@@ -198,8 +200,8 @@ class MultiDroneWaypointFollower:
 
                     async for ned in self.drone.telemetry.position_velocity_ned():
                         dn = ned.position.north_m - wp["x_local"]
-                        de = ned.position.east_m - wp["y_local"]
-                        dd = ned.position.down_m - (-wp["z"])
+                        de = ned.position.east_m  - wp["y_local"]
+                        dd = ned.position.down_m  - (-wp["z"])
                         dist = math.sqrt(dn*dn + de*de + dd*dd)
                         break
 
@@ -213,8 +215,8 @@ class MultiDroneWaypointFollower:
 
             try:
                 await self.drone.offboard.stop()
-            except OffboardError as e:
-                log(self.drone_id, f"WARN: offboard stop failed: {e._result.result}")
+            except OffboardError:
+                pass
 
             await self.drone.action.land()
 
@@ -250,7 +252,6 @@ class MultiDroneWaypointFollower:
             writer = csv.writer(f)
             writer.writerow(["timestamp", "latitude", "longitude",
                              "abs_altitude", "rel_altitude"])
-
             while self.is_logging:
                 try:
                     async for pos in self.drone.telemetry.position():
@@ -264,11 +265,10 @@ class MultiDroneWaypointFollower:
                         f.flush()
                         break
                 except Exception as e:
-                    log(self.drone_id, f"Telemetry log stream error: {e}")
+                    log(self.drone_id, f"Telemetry log error: {e}")
                 await asyncio.sleep(0.5)
 
     async def _track_global_position(self):
-        """Continuously update GPS position for collision avoidance."""
         while True:
             try:
                 async for pos in self.drone.telemetry.position():
@@ -280,16 +280,13 @@ class MultiDroneWaypointFollower:
 
 
 async def collision_monitor(state: SharedState):
-    """GPS-based pairwise collision avoidance with startup grace period."""
     drone_ids = [d["id"] for d in DRONES]
-
     log(0, f"Collision monitor waiting {COLLISION_GRACE_PERIOD_S}s (takeoff grace)...")
     await asyncio.sleep(COLLISION_GRACE_PERIOD_S)
     log(0, "Collision monitor ACTIVE.")
 
     while True:
         await asyncio.sleep(HOLD_CHECK_INTERVAL_S)
-
         for i in range(len(drone_ids)):
             for j in range(i + 1, len(drone_ids)):
                 id_a, id_b = drone_ids[i], drone_ids[j]
@@ -346,12 +343,22 @@ async def main():
         print("\nOne or more drones failed. Aborting.")
         return
 
-    print("\nAll drones ready. Starting concurrent coverage + collision avoidance.\n")
+    print("\nAll drones ready. Starting staggered concurrent coverage.\n")
 
     monitor = asyncio.create_task(collision_monitor(state))
-    await asyncio.gather(*[f.run_mission() for f in followers])
-    monitor.cancel()
 
+    # Staggered start – prevents the simultaneous arming race
+    async def delayed_mission(follower, delay):
+        await asyncio.sleep(delay)
+        await follower.run_mission()
+
+    await asyncio.gather(
+        delayed_mission(followers[0], 0.0),
+        delayed_mission(followers[1], STAGGER_DELAY_S),
+        delayed_mission(followers[2], STAGGER_DELAY_S * 2),
+    )
+
+    monitor.cancel()
     print("\n=== All 3 drones finished their regions ===")
 
 
