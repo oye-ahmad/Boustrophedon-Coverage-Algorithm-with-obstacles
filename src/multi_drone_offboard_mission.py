@@ -42,16 +42,19 @@ from mavsdk.offboard import OffboardError, PositionNedYaw
 DRONES = [
     {
         "id": 1, "port": 14550,
+        "grpc_port": 50051,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone1.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone1.csv"),
     },
     {
         "id": 2, "port": 14560,
+        "grpc_port": 50052,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone2.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone2.csv"),
     },
     {
         "id": 3, "port": 14570,
+        "grpc_port": 50053,
         "waypoints_file": os.path.expanduser("~/coverage_map/waypoints_drone3.csv"),
         "log_file": os.path.expanduser("~/coverage_map/actual_path_drone3.csv"),
     },
