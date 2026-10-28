@@ -1,0 +1,9 @@
+script        : swarm_mission_mavsdk_v4.py
+started       : 2026-10-28 19:38:12
+inputs from   : /home/ahmad/coverage_map
+outputs in    : /home/ahmad/coverage_map/missions/2026-10-28_19-38-12_flight
+arguments     : {'dry_run': False, 'plot_only': False, 'split': 'auto', 'no_layers': False, 'num_drones': 3, 'ignore_link_check': False, 'allow_partial': False, 'waypoint_dir': None, 'run_dir': None}
+drones        : [{'id': 1, 'url': 'udpin://0.0.0.0:14550', 'grpc_port': 50051, 'altitude_m': 8.0}, {'id': 2, 'url': 'udpin://0.0.0.0:14560', 'grpc_port': 50052, 'altitude_m': 11.0}, {'id': 3, 'url': 'udpin://0.0.0.0:14570', 'grpc_port': 50053, 'altitude_m': 14.0}]
+time model    : 1.5 m/s + 8.0 s per corner
+avoidance     : safe 5.0 m, emergency 2.5 m, vertical 2.0 m
+swath width   : 3.0 m

@@ -1,0 +1,48 @@
+==============================================================================
+                               MISSION METRICS                                
+==============================================================================
+Swath width used for area: 3.0 m   (grid 0.5 m)
+
+--- Drone 1 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 1:56 min:s  (116 s)
+  Coverage time                  : 1:21 min:s
+  Distance flown (total/coverage): 225 m / 169 m   (planned 169 m)
+  Average coverage speed         : 2.09 m/s
+  Area covered                   : 538 m2  (30% of swarm total)
+  Path tracking error            : mean 0.18 m, RMSE 0.22 m, max 0.75 m
+  Battery                        : 100% -> 71%  (used 29.0%, 15.03 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 948 mAh
+  Est. flight time left at end   : 3.1 min (down to 25% failsafe)
+--- Drone 2 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 2:16 min:s  (136 s)
+  Coverage time                  : 1:21 min:s
+  Distance flown (total/coverage): 329 m / 295 m   (planned 289 m)
+  Average coverage speed         : 3.65 m/s
+  Area covered                   : 930 m2  (52% of swarm total)
+  Path tracking error            : mean 0.28 m, RMSE 0.35 m, max 0.74 m
+  Battery                        : 100% -> 66%  (used 34.0%, 14.98 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 1111 mAh
+  Est. flight time left at end   : 2.7 min (down to 25% failsafe)
+--- Drone 3 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 2:39 min:s  (159 s)
+  Coverage time                  : 1:19 min:s
+  Distance flown (total/coverage): 313 m / 225 m   (planned 254 m)
+  Average coverage speed         : 2.87 m/s
+  Area covered                   : 584 m2  (33% of swarm total)
+  Path tracking error            : mean 0.19 m, RMSE 0.26 m, max 0.79 m
+  Battery                        : 100% -> 60%  (used 40.0%, 15.08 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 1290 mAh
+  Est. flight time left at end   : 2.3 min (down to 25% failsafe)
+
+--- Whole swarm --------------------------------------------------------------
+  Total mission time (first takeoff -> last landing): 2:39 min:s (159 s)
+  Coverage makespan (first start -> last finish)    : 1:26 min:s
+  Target area (planned paths x swath)               : 1733 m2
+  Total area covered (union, no double counting)    : 1784 m2
+  Coverage of target area                           : 99.2 %
+  Overlap (seen by 2+ drones)                       : 268 m2 (15.0 % of covered)
+  Total distance flown                              : 867 m
+  Total battery used (sum of drones)                : 103.0 %
+  Area per 1% battery                               : 17 m2
+  Minimum separation between drones                 : 4.0 m
+==============================================================================

@@ -1,0 +1,139 @@
+[ run folder ] /home/ahmad/coverage_map/missions/2026-10-28_19-38-12_flight
+[    0.0s] SWARM    mavsdk-python 3.15.3
+[    4.1s] SWARM    === connecting to drones ===
+[    4.1s] Drone 1  connecting on udpin://0.0.0.0:14550 (gRPC 50051) ...
+[    4.1s] Drone 2  connecting on udpin://0.0.0.0:14560 (gRPC 50052) ...
+[    4.1s] Drone 3  connecting on udpin://0.0.0.0:14570 (gRPC 50053) ...
+[    4.1s] Drone 1  connected, waiting for position lock / armable ...
+[    4.1s] Drone 3  connected, waiting for position lock / armable ...
+[    4.1s] Drone 2  connected, waiting for position lock / armable ...
+[    4.3s] Drone 2  health OK
+[    4.3s] Drone 1  health OK
+[    5.3s] Drone 3  health OK
+[    5.3s] SWARM    Drone 1 (udpin://0.0.0.0:14550): OK
+[    5.3s] SWARM    Drone 2 (udpin://0.0.0.0:14560): OK
+[    5.3s] SWARM    Drone 3 (udpin://0.0.0.0:14570): OK
+[    5.5s] SWARM    map origin (0,0) = -35.3632620, 149.1652379
+[    5.5s] SWARM    Drone 1: local origin offset E=+0.00 m N=+0.00 m, home in map = (+0.0, -0.0)
+[    5.5s] SWARM    Drone 2: local origin offset E=+5.00 m N=-0.00 m, home in map = (+5.0, -0.0)
+[    5.5s] SWARM    Drone 3: local origin offset E=+10.00 m N=+0.00 m, home in map = (+10.0, -0.0)
+[    5.5s] SWARM    === pre-flight link check: watching all drones for 20 s (nothing is armed) ===
+[   25.5s] SWARM    Drone 1: link drop-outs 0, link now UP, position updates 4.0/s  -> OK
+[   25.5s] SWARM    Drone 2: link drop-outs 0, link now UP, position updates 4.0/s  -> OK
+[   25.5s] SWARM    Drone 3: link drop-outs 0, link now UP, position updates 4.0/s  -> OK
+[   25.5s] SWARM    plan: re-split by estimated time from waypoints_drone*.csv (model: 1.5 m/s + 8 s per corner)
+[   25.5s] SWARM    Drone 1:  28 waypoints,  168.6 m, est.  5.3 min, 0 transit legs, altitude 8.0 m, start (-19.5, -19.5)
+[   25.5s] SWARM    Drone 2:  18 waypoints,  289.1 m, est.  5.3 min, 0 transit legs, altitude 11.0 m, start (-12.1, +19.5)
+[   25.5s] SWARM    Drone 3:  21 waypoints,  253.7 m, est.  5.2 min, 3 transit legs, altitude 14.0 m, start (+0.2, -4.5)
+[   26.5s] SWARM    === all drones ready: taking off ===
+[   26.6s] Drone 1  armed, taking off (ArduPilot default height)
+[   26.6s] Drone 2  armed, taking off (ArduPilot default height)
+[   26.6s] Drone 3  armed, taking off (ArduPilot default height)
+[   32.6s] Drone 3  airborne at 2.0 m
+[   32.8s] Drone 2  airborne at 2.0 m
+[   32.8s] Drone 1  airborne at 2.0 m
+[   33.2s] Drone 3  offboard (GUIDED position control) active
+[   33.3s] Drone 2  offboard (GUIDED position control) active
+[   33.3s] Drone 1  offboard (GUIDED position control) active
+[   34.4s] Drone 2  conflict with Drone 1 (5.0 m) -> HOLDING
+[   36.4s] Drone 2  clear of Drone 1 -> resuming
+[   38.0s] Drone 1  at layer altitude 7.5 m
+[   38.0s] Drone 1  flying to start of my area (28 waypoints, 169 m)
+[   38.2s] Drone 2  conflict with Drone 1 (5.0 m) -> HOLDING
+[   39.8s] Drone 2  clear of Drone 1 -> resuming
+[   40.2s] Drone 3  at layer altitude 13.4 m
+[   40.2s] Drone 3  flying to start of my area (21 waypoints, 254 m)
+[   41.7s] Drone 3  conflict with Drone 2 (3.8 m) -> HOLDING
+[   42.4s] Drone 3  WARNING: Drone 2 2.2 m away and closing -> EVADING up to 17.9 m
+[   43.4s] Drone 2  at layer altitude 10.3 m
+[   43.4s] Drone 2  flying to start of my area (18 waypoints, 289 m)
+[   45.7s] Drone 3  clear of Drone 2 -> resuming
+[   61.8s] Drone 1  reached WP 5/28
+[   69.5s] Drone 2  reached WP 5/18
+[   69.7s] Drone 3  reached WP 5/21
+[   76.2s] Drone 1  reached WP 10/28
+[   89.4s] Drone 1  reached WP 15/28
+[   91.5s] Drone 3  reached WP 10/21
+[   95.7s] Drone 2  reached WP 10/18
+[  104.0s] Drone 1  reached WP 20/28
+[  113.4s] Drone 3  reached WP 15/21
+[  116.9s] Drone 2  reached WP 15/18
+[  117.0s] Drone 1  reached WP 25/28
+[  126.0s] Drone 1  reached WP 28/28
+[  126.0s] Drone 1  coverage done
+[  128.7s] Drone 3  reached WP 20/21
+[  131.0s] Drone 2  reached WP 18/18
+[  131.0s] Drone 2  coverage done
+[  132.8s] Drone 1  landing (mission complete)
+[  133.9s] Drone 2  waiting to land: Drone 1 is below me
+[  135.4s] Drone 3  reached WP 21/21
+[  135.4s] Drone 3  coverage done
+[  143.4s] Drone 3  waiting to land: Drone 2 is below me
+[  147.5s] Drone 2  landing (mission complete)
+[  151.8s] Drone 1  landed and disarmed
+[  168.0s] Drone 3  landing (mission complete)
+[  172.6s] Drone 2  landed and disarmed
+[  195.6s] Drone 3  landed and disarmed
+
+========================================================================
+MISSION SUMMARY
+========================================================================
+Drone 1: status=done | WPs 28/28 reached, 0 missed | planned 169 m, flown 225 m | flight time 125 s | holds 0, evades 0, held 0 s | link drop-outs 0
+Drone 2: status=done | WPs 18/18 reached, 0 missed | planned 289 m, flown 329 m | flight time 146 s | holds 2, evades 0, held 4 s | link drop-outs 0
+Drone 3: status=done | WPs 21/21 reached, 0 missed | planned 254 m, flown 313 m | flight time 169 s | holds 1, evades 1, held 4 s | link drop-outs 0
+Minimum 3-D separation between airborne drones: 4.0 m (Drones 2 & 3)
+========================================================================
+/home/ahmad/.local/lib/python3.10/site-packages/matplotlib/projections/__init__.py:63: UserWarning: Unable to import Axes3D. This may be due to multiple versions of Matplotlib being installed (e.g. as a system package and as a pip package). As a result, the 3D projection is not available.
+  warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+[  196.9s] SWARM    plot saved -> /home/ahmad/coverage_map/missions/2026-10-28_19-38-12_flight/swarm_planned_vs_actual.png
+
+==============================================================================
+                               MISSION METRICS                                
+==============================================================================
+Swath width used for area: 3.0 m   (grid 0.5 m)
+
+--- Drone 1 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 1:56 min:s  (116 s)
+  Coverage time                  : 1:21 min:s
+  Distance flown (total/coverage): 225 m / 169 m   (planned 169 m)
+  Average coverage speed         : 2.09 m/s
+  Area covered                   : 538 m2  (30% of swarm total)
+  Path tracking error            : mean 0.18 m, RMSE 0.22 m, max 0.75 m
+  Battery                        : 100% -> 71%  (used 29.0%, 15.03 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 948 mAh
+  Est. flight time left at end   : 3.1 min (down to 25% failsafe)
+--- Drone 2 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 2:16 min:s  (136 s)
+  Coverage time                  : 1:21 min:s
+  Distance flown (total/coverage): 329 m / 295 m   (planned 289 m)
+  Average coverage speed         : 3.65 m/s
+  Area covered                   : 930 m2  (52% of swarm total)
+  Path tracking error            : mean 0.28 m, RMSE 0.35 m, max 0.74 m
+  Battery                        : 100% -> 66%  (used 34.0%, 14.98 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 1111 mAh
+  Est. flight time left at end   : 2.7 min (down to 25% failsafe)
+--- Drone 3 ----------------------------------------------------------------
+  Flight time (takeoff->landing) : 2:39 min:s  (159 s)
+  Coverage time                  : 1:19 min:s
+  Distance flown (total/coverage): 313 m / 225 m   (planned 254 m)
+  Average coverage speed         : 2.87 m/s
+  Area covered                   : 584 m2  (33% of swarm total)
+  Path tracking error            : mean 0.19 m, RMSE 0.26 m, max 0.79 m
+  Battery                        : 100% -> 60%  (used 40.0%, 15.08 %/min)
+  Voltage / charge used          : 12.60 V -> 12.60 V, 1290 mAh
+  Est. flight time left at end   : 2.3 min (down to 25% failsafe)
+
+--- Whole swarm --------------------------------------------------------------
+  Total mission time (first takeoff -> last landing): 2:39 min:s (159 s)
+  Coverage makespan (first start -> last finish)    : 1:26 min:s
+  Target area (planned paths x swath)               : 1733 m2
+  Total area covered (union, no double counting)    : 1784 m2
+  Coverage of target area                           : 99.2 %
+  Overlap (seen by 2+ drones)                       : 268 m2 (15.0 % of covered)
+  Total distance flown                              : 867 m
+  Total battery used (sum of drones)                : 103.0 %
+  Area per 1% battery                               : 17 m2
+  Minimum separation between drones                 : 4.0 m
+==============================================================================
+[  197.1s] SWARM    metrics saved -> /home/ahmad/coverage_map/missions/2026-10-28_19-38-12_flight/mission_metrics.txt (+ .csv)
+[  197.6s] SWARM    coverage map saved -> /home/ahmad/coverage_map/missions/2026-10-28_19-38-12_flight/coverage_map.png
