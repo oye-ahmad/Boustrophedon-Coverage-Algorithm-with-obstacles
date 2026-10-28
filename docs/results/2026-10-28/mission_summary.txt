@@ -1,0 +1,8 @@
+========================================================================
+MISSION SUMMARY
+========================================================================
+Drone 1: status=done | WPs 14/14 reached, 0 missed | planned 237 m, flown 277 m | flight time 490 s | holds 0, evades 0, held 0 s
+Drone 2: status=land-timeout | WPs 35/37 reached, 2 missed | planned 237 m, flown 274 m | flight time - | holds 2, evades 0, held 16 s
+Drone 3: status=land-timeout | WPs 17/17 reached, 0 missed | planned 237 m, flown 263 m | flight time - | holds 0, evades 0, held 0 s
+Minimum 3-D separation between airborne drones: 3.0 m (Drones 1 & 2)
+========================================================================

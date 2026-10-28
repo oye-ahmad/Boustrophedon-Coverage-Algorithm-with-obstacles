@@ -1,0 +1,17 @@
+drone,flight_s,coverage_s,dist_m,coverage_dist_m,planned_m,avg_speed,area_m2,xte_mean,xte_rmse,xte_max,batt_start,batt_end,batt_used,drain_pct_min,volt_start,volt_end,mah_used,endurance_left_min
+1,428.848,268.591,276.986,235.642,237.126,0.877,749.000,0.140,0.179,0.600,100.000,100.000,0.000,0.000,12.600,12.600,0.000,
+2,800.008,454.935,274.290,227.269,237.126,0.500,701.750,0.078,0.117,0.898,100.000,100.000,0.000,0.000,12.600,12.600,0.000,
+3,529.952,293.581,262.703,234.704,237.126,0.799,678.750,0.107,0.150,0.728,100.000,100.000,0.000,0.000,12.600,12.600,0.000,
+
+swarm_mission_s,800.008
+swarm_coverage_makespan_s,475.914
+swarm_target_m2,1744.250
+swarm_covered_m2,1752.250
+swarm_covered_target_m2,1717.250
+swarm_overlap_m2,345.500
+swarm_dist_m,813.978
+swarm_batt_used_sum,0.000
+swarm_min_sep,3.002
+swarm_coverage_pct,98.452
+swarm_overlap_pct,19.718
+swarm_m2_per_pct,

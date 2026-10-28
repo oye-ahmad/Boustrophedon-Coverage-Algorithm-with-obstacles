@@ -1,3 +1,307 @@
+# 🚁 Boustrophedon Coverage with Obstacles: Single & Multi-UAV
+
+> Part of the FYP **"AI-Powered Cooperative Drone Swarm for Autonomous Area Coverage and Object Detection"** (UET Taxila, Computer Engineering).
+> Planner: ROS 2 (Humble) BCD coverage nodes · Flight: ArduPilot SITL + Gazebo · Control: MAVSDK-Python (GUIDED offboard)
+
+**Status (28 Oct 2026):** a **3-drone swarm** covers an obstacle map in SITL. The work is split evenly and each drone flies at its own altitude, with 3-D collision avoidance, a safe return home, and a full post-flight metrics report. Latest result: **98.5 % of the target area covered**, with path-tracking RMSE **0.12–0.18 m**.
+
+---
+
+## Table of contents
+1. [Repository structure](#1-repository-structure)
+2. [Progress log](#2-progress-log)
+3. [How to run the 3-drone mission (step by step)](#3-how-to-run-the-3-drone-mission-step-by-step)
+4. [How the swarm mission works](#4-how-the-swarm-mission-works)
+5. [Latest mission results (28 Oct 2026)](#5-latest-mission-results-28-oct-2026)
+6. [Problems we faced and how we solved them](#6-problems-we-faced-and-how-we-solved-them)
+7. [Known issues and next steps](#7-known-issues-and-next-steps)
+8. [Earlier results](#8-earlier-results)
+9. [Single-UAV BCD coverage (detailed write-up)](#single-uav-autonomous-coverage-using-boustrophedon-cellular-decomposition)
+
+---
+
+## 1. Repository structure
+
+```text
+coverage_ws/
+├── src/
+│   ├── coverage_planner/                     # ROS 2 package (ament_python)
+│   │   └── coverage_planner/
+│   │       ├── bcd_coverage_node.py          # grid-based BCD, single UAV  -> waypoints.csv
+│   │       ├── bcd_geometric_planner.py      # geometric (polygon) BCD
+│   │       ├── coverage_planner_node.py      # first simple lawnmower planner
+│   │       ├── bcd_coverage_multi_node.py    # BCD + split into 3 regions -> waypoints_drone{1,2,3}.csv
+│   │       └── multi_drone_formation_controller.py   # early MAVROS formation test (arming issue, not used)
+│   │
+│   ├── swarm_mission_mavsdk.py               # ★ CURRENT 3-drone mission (MAVSDK, ArduPilot GUIDED)
+│   ├── multi_drone_offboard_mission.py       # previous 3-drone script (kept for reference)
+│   ├── region_partitioner.py                 # length-balanced split helper (older)
+│   ├── plot_combined_coverage.py             # older 3-drone plotter
+│   ├── mission_executor.py                   # single-UAV MAVSDK mission (AUTO mode) + GPS logging
+│   ├── mavsdk_waypoint_follower.py           # single-UAV offboard waypoint follower
+│   └── path_plotter.py                       # single-UAV planned-vs-actual plot
+│
+└── docs/
+    ├── images/                               # figures used in this README
+    └── results/2026-10-28/                   # metrics, summary and log of the latest mission
+```
+
+ROS 2 entry points (`ros2 run coverage_planner <name>`): `bcd_coverage_node`, `bcd_geometric_node`, `coverage_planner_node`, `multi_drone_node`, `swarming_node`.
+
+All mission data is read from and written to **`~/coverage_map/`**: the map, the waypoint CSVs, the flight logs, the plots and the metrics.
+
+---
+
+## 2. Progress log
+
+| Date | Milestone |
+|---|---|
+| 12 Aug 2026 | First lawnmower planner on a ROS 2 occupancy map |
+| 13–15 Aug | Grid-based **BCD with obstacles** and **geometric BCD**; single-UAV SITL flight with GPS logging and planned-vs-actual plot |
+| 20–21 Aug | First swarm attempt: MAVROS formation controller (stopped: arming problem never solved) |
+| 22–24 Aug | **3-drone BCD coverage with MAVSDK**: 3-way split, separate gRPC ports, hold-based collision avoidance, first combined plot |
+| 28 Oct | **`swarm_mission_mavsdk.py`**: code review of the swarm stack, 10+ bugs fixed (see [section 6](#6-problems-we-faced-and-how-we-solved-them)), equal-length work split, altitude layers, predictive 3-D collision avoidance, safe return, failsafes, full metrics report; successful 3-drone SITL mission on the obstacle map |
+
+---
+
+## 3. How to run the 3-drone mission (step by step)
+
+You need **5 terminals**. In every terminal that uses ROS 2, run:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/coverage_ws/install/setup.bash     # otherwise: "Package 'coverage_planner' not found"
+```
+(Tip: put both lines at the end of `~/.bashrc`.)
+
+**One-time checks**
+```bash
+pip3 show mavsdk | grep Version     # tested with mavsdk-python 3.15.3 (gRPC API)
+pip3 install matplotlib             # plots + coverage map
+```
+
+- The Gazebo world must contain 3 drones, ideally **≥ 5 m apart**. Closer than 3 m and the script takes off one drone at a time, 8 s apart. Each drone's ArduPilot plugin needs its own `fdm_port_in`: 9002, 9012 and 9022.
+- **Close QGroundControl.** It grabs UDP 14550, which drone 1 needs (see the tip at the end of this section).
+
+**Step 1: Gazebo (Terminal 1)**
+```bash
+gz sim -v4 -r <your_3_drone_world>.sdf
+```
+
+**Step 2: three ArduPilot SITL instances (Terminals 2, 3, 4)**
+```bash
+cd ~/ardupilot/ArduCopter
+sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON -I0 --sysid 1 --console   # Drone 1 -> UDP 14550
+sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON -I1 --sysid 2 --console   # Drone 2 -> UDP 14560
+sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON -I2 --sysid 3 --console   # Drone 3 -> UDP 14570
+```
+> ⚠ **Do not add `--out=udp:...:14550/14560/14570`.** `-I N` already sends to port 14550 + 10·N. A second `--out` duplicates every packet, and that crashed `mavsdk_server` (see [problem 12](#6-problems-we-faced-and-how-we-solved-them)).
+> Check by typing `output` in each MAVProxy console: each port should appear only once.
+
+Wait until every console reports a GPS fix / `EKF3 IMU0 is using GPS` (about 30–60 s).
+
+**Step 3: waypoints (only if you want a new plan)**
+```bash
+python3 ~/coverage_map/generate_map_with_obstacles.py         # optional: new obstacle map
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=$HOME/coverage_map/coverage_area.yaml   # leave running
+ros2 run nav2_util lifecycle_bringup map_server               # activates the map (prints nothing)
+ros2 run coverage_planner multi_drone_node                    # writes ~/coverage_map/waypoints_drone{1,2,3}.csv, then Ctrl+C
+```
+If those CSVs (or a single `waypoints.csv`) already exist, skip this step. The mission script re-balances the work anyway.
+
+**Step 4: dry run (nothing flies)**
+```bash
+cd ~/coverage_ws/src
+python3 swarm_mission_mavsdk.py --dry-run          # -> ~/coverage_map/swarm_plan_dry_run.png
+```
+
+**Step 5: fly**
+```bash
+pkill -f mavsdk_server                             # clear leftovers from earlier runs
+python3 swarm_mission_mavsdk.py 2>&1 | grep --line-buffered -v "not-existing" | tee ~/coverage_map/run.log
+```
+
+- The `grep` hides the harmless MAVSDK message `Received ack for not-existing command`.
+- **Ctrl+C once** makes every airborne drone land where it is. Press it twice only in an emergency.
+- Useful options: `--num-drones 2`, `--allow-partial` (fly with whichever drones connected), `--split planner|length|auto`, `--no-layers`, `--plot-only` (re-plot and recompute the metrics from the last logs).
+
+**Step 6: results in `~/coverage_map/`**
+
+| File | Content |
+|---|---|
+| `mission_metrics.txt` / `.csv` | all post-flight metrics (section 5) |
+| `coverage_map.png` | area covered per drone, overlap, missed cells |
+| `swarm_planned_vs_actual.png` | planned vs flown path of every drone |
+| `mission_summary.txt` | waypoints reached/missed, holds/evades, minimum separation |
+| `actual_path_droneN.csv` | raw log: GPS, map-frame position, status, battery |
+| `flown_waypoints_droneN.csv` | the waypoints each drone actually received |
+
+**Tip (QGroundControl while flying):** add a second output to each SITL with a *different* port (e.g. MAVProxy `output add 127.0.0.1:14551` / `14561` / `14571`). In QGC, add UDP links for those ports and turn off auto-connect to 14550.
+
+---
+
+## 4. How the swarm mission works
+
+```text
+ /map (OccupancyGrid)
+        │  bcd_coverage_multi_node  (ROS 2)
+        ▼
+ BCD cells → lawnmower paths → greedy cell order → waypoints_drone{1,2,3}.csv
+        │
+        │  swarm_mission_mavsdk.py  (one mavsdk_server per drone, gRPC 50051/52/53)
+        ▼
+ connect + health check (all drones)  →  measure each drone's local origin → shared map frame
+        ▼
+ join all CSVs into one path → cut into N pieces of EQUAL LENGTH → give each piece to the nearest drone
+        ▼
+ arm → take off to 3 m → climb to own layer (8 / 11 / 14 m) → fly piece (10 Hz position setpoints)
+        │         ▲
+        │         └── collision monitor (10 Hz, 3-D, predictive): HOLD / EVADE / resume
+        ▼
+ fly home at own layer → wait until nobody is below → land → metrics + plots
+```
+
+**4.1 Shared map frame.** Every ArduPilot instance measures position from *its own* local origin, where it booted. At start-up the script computes each origin in lat/lon (`current GPS − current NED offset`) and converts it into one shared map frame. Map point (x, y) is then the same spot on the ground for every drone. Map (0, 0) = drone 1's origin, unless `MAP_ORIGIN_LATLON` is set. Map x = **East**, y = **North** (ROS ENU).
+
+**4.2 Equal work split.** The planner's paths are joined in their original order and cut into equal-length pieces, cutting inside a row if needed. Each piece is assigned (and possibly reversed) so that the longest home-to-start trip is as short as possible, and two drones never start at the same point. Waypoint counts can differ: a waypoint is a corner, so a long straight row needs only 2. In the latest run drone 2 had 37 waypoints and drone 1 had 14, but **each drone flew 237.1 m**.
+
+**4.3 Altitude layers.** Each drone takes off to 3 m, then climbs straight up to its own cruise altitude (8 / 11 / 14 m, set in `DRONES`). This removes most conflicts by design. Turn it off with `--no-layers`.
+
+**4.4 Collision avoidance (10 Hz, 3-D).** For every pair of airborne drones:
+
+- **Who gives way:** a drone that is taking off or landing cannot be steered, so the other one always gives way. Otherwise the drone with the higher id gives way.
+- **Conflict test:** a conflict is predicted from the velocities over a 3 s horizon, both horizontally and vertically, not only from the current distance.
+- **HOLD:** if the other drone will pass by, the drone that gives way stops in place.
+- **EVADE:** if the other drone is heading straight at it, or it is already within 2.5 m, it moves 4 m vertically away. It moves sideways instead if the other drone is taking off or landing. In an emergency the priority drone stops too.
+- **No flicker:** a decision is kept until the other drone has really passed. This is judged with the speed the drone *would* have if it resumed, so there is no hold/resume flicker.
+- **No dead-lock:** a hold longer than 20 s turns into an evade.
+
+**4.5 Return and landing.** Drones fly home at their own layer altitude, wait until no other drone is below them, then land. We don't use ArduPilot RTL because it would send all drones to the same RTL altitude.
+
+**4.6 Safety and robustness.**
+
+- **Timeouts:** connect, health check, climb, every waypoint and landing all have timeouts. Time spent holding for another drone doesn't count against the waypoint timeout.
+- **Arming:** up to 3 tries.
+- **Battery failsafe:** each drone returns home if its battery drops below 25 %.
+- **Ctrl+C:** makes every drone land.
+- **Dead connection:** if a drone's `mavsdk_server` dies or its telemetry freezes for more than 5 s, that drone is taken out of the mission with one clear message, and the others continue.
+- **Streams:** setpoints are sent by a dedicated 10 Hz task, and telemetry streams restart automatically.
+
+**4.7 Metrics.** These are computed from the flight logs, so `--plot-only` can redo them.
+
+- **Per drone:** flight and coverage time, distance flown vs planned, average speed, area covered (swath model), path-tracking error (mean / RMSE / max), and battery start → end, % used, drain %/min, voltage, mAh and estimated time left.
+- **Swarm:** total mission time, coverage makespan, target area, total area covered (union), coverage %, overlap, total distance, total battery, area per % battery, and minimum separation.
+
+**Main settings** (top of `swarm_mission_mavsdk.py`)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DRONES` | 3 drones, UDP 14550/60/70, gRPC 50051/52/53, 8/11/14 m | connection + layer altitude per drone |
+| `TAKEOFF_ALTITUDE_M` | 3.0 | ArduPilot takeoff height before climbing to the layer |
+| `ACCEPTANCE_RADIUS_M` | 1.0 | waypoint reached (3-D) |
+| `SAFE_DIST_M` / `EMERGENCY_DIST_M` | 5.0 / 2.5 | horizontal separation wanted / emergency |
+| `VERTICAL_SAFE_M` | 2.0 | vertical gap that counts as separated |
+| `SWATH_WIDTH_M` | 3.0 | camera ground width for area metrics (= row spacing). Real camera: 2·h·tan(HFOV/2) |
+| `BATTERY_FAILSAFE_PCT` | 25 | return-home threshold |
+| `MAP_ORIGIN_LATLON` | None | lat/lon of map (0, 0); None = drone 1's origin |
+
+---
+
+## 5. Latest mission results (28 Oct 2026)
+
+Setup: obstacle map 40 × 40 m at 0.2 m/px (`generate_map_with_obstacles.py`), 3 drones spawned about 5 m apart, ArduPilot SITL + Gazebo, mavsdk-python 3.15.3, row spacing 3 m. The planner's 3 CSVs were unbalanced (drone 2 had only 8 waypoints), so the script re-split the full 711 m path into **3 × 237.1 m**.
+
+### 5.1 Plan from the dry run
+<img src="docs/images/2026-10-28_swarm_plan_dry_run.png" alt="Dry-run plan" width="600"/>
+
+*The dry run doesn't know the real home positions yet, so the piece-to-drone assignment (colours) can change at flight time. The three pieces themselves are the same.*
+
+### 5.2 Planned vs actual flight paths
+<img src="docs/images/2026-10-28_swarm_planned_vs_actual.png" alt="Planned vs actual" width="600"/>
+
+*Light lines are planned, dark lines are flown; ▲ marks each drone's start. Straight diagonals are trips to and from home, and the planner's jumps between cells.*
+
+### 5.3 Area coverage map
+<img src="docs/images/2026-10-28_coverage_map.png" alt="Coverage map" width="600"/>
+
+### 5.4 Mission summary
+
+| | Drone 1 | Drone 2 | Drone 3 | Swarm |
+|---|---|---|---|---|
+| Layer altitude | 8 m | 11 m | 14 m | |
+| Waypoints reached | 14 / 14 | 35 / 37 (2 timed out) | 17 / 17 | 66 / 68 |
+| Planned / flown distance | 237 / 277 m | 237 / 274 m | 237 / 263 m | 814 m flown |
+| Flight time (takeoff → landing) | 7:09 | 13:20 | 8:50 | **13:20** total mission |
+| Coverage time | 4:29 | 7:35 | 4:54 | 7:56 makespan |
+| Average coverage speed | 0.88 m/s | 0.50 m/s | 0.80 m/s | |
+| Area covered | 749 m² | 702 m² | 679 m² | **1752 m²** (union) |
+| Path-tracking error (RMSE / max) | 0.18 / 0.60 m | 0.12 / 0.90 m | 0.15 / 0.73 m | |
+| Holds / evades | 0 / 0 | 2 / 0 (held 16 s) | 0 / 0 | min separation **3.0 m** |
+| End status | landed | land timeout* | land timeout* | |
+
+- **Coverage of target area: 98.5 %** (target 1744 m², the planned paths × 3 m swath)
+- **Overlap: 346 m² (19.7 %)**, mainly from the planner's long jumps between cells being flown as coverage (see section 7)
+- **Battery: 0 % used**, because the SITL battery wasn't being simulated in this run, so no drain figures
+- *Land timeout: the script stopped waiting after 120 s; see section 7.
+
+Full files: [`docs/results/2026-10-28/`](docs/results/2026-10-28/): `mission_metrics.txt`, `mission_metrics.csv`, `mission_summary.txt`, `run_log.txt`.
+
+**Observations**
+
+- Path tracking is excellent (RMSE ≤ 0.18 m), and all assigned area except 2 corner waypoints was covered.
+- Equal *distance* is not equal *time*. ArduPilot slows down at every waypoint, so drone 2, with many short legs (one corner every ~6.5 m versus every ~18 m for drone 1), took 7:35 of coverage versus 4:29.
+- Takeoff to 3 m took about 45 s and speeds were 0.5–0.9 m/s. That strongly suggests Gazebo was running **slower than real time** with 3 drones; check the real-time factor (RTF) in the Gazebo window.
+
+---
+
+## 6. Problems we faced and how we solved them
+
+### 6.1 Bugs found in the previous swarm code (code review, 28 Oct)
+
+| # | Problem | Effect | Fix in `swarm_mission_mavsdk.py` |
+|---|---|---|---|
+| 1 | **X/Y axes swapped**: `north = x_local, east = y_local`, but the map is ENU (x = East) | every path mirrored across the diagonal; invisible on a square empty map, dangerous with obstacles | `north = y`, `east = x` |
+| 2 | **Each drone uses its own local origin** for NED setpoints | if drones spawn in different places, the same map point is a different ground point for each drone | measure every origin at start-up and convert to one shared map frame |
+| 3 | **Work split by cell count**, not by work (`bcd_coverage_multi_node.partition_cells`) | unequal workloads; with fewer cells than drones (e.g. an empty map gives 1 cell) drones 2 and 3 got **no waypoints** | re-split the whole path by **equal length**; nearest-drone assignment |
+| 4 | **All drones at the same altitude**, and avoidance was only "higher id waits" | the lower id never gave way, so they could still collide; threshold 4 m in code vs 5 m in docs | altitude layers + predictive 3-D hold/evade avoidance |
+| 5 | Errors silently ignored (`except: pass`), no timeouts (the climb loop could hang forever) | script hangs or fails silently | timeouts everywhere, clear one-line warnings |
+| 6 | All drones would land via the same RTL altitude, and no landing-order check | collision risk on return | return at own layer, wait until no drone is below, then land |
+
+### 6.2 Problems found while testing the new logic (simulated drones)
+
+| # | Problem | Fix |
+|---|---|---|
+| 7 | Head-on at the same altitude: the waiting drone sat in the priority drone's path, **1.0 m** minimum separation | if the other drone is heading straight at you, EVADE (move vertically) early instead of holding; result **6.6 m** |
+| 8 | Drone landing through another drone's layer: **2.5 m** separation | drones taking off or landing get right of way; vertical closing is predicted; drones evade sideways from a descending drone; "wait until nobody is below" before landing |
+| 9 | Hold / resume **flicker** every 0.2 s | keep the decision until the other drone has passed, judged with the drone's *intended* velocity and its speed before it yielded |
+| 10 | Transit to the first waypoint counted as coverage (false 7–8 m "tracking error") | separate `transit` status, excluded from the metrics |
+
+### 6.3 Problems during SITL bring-up
+
+| # | Symptom | Cause | Fix |
+|---|---|---|---|
+| 11 | `Package 'coverage_planner' not found` | workspace not sourced in that terminal | `source ~/coverage_ws/install/setup.bash` (each terminal, or in `~/.bashrc`) |
+| 12 | `mavsdk_server` **crashed** at takeoff; endless `Connection refused`; every MAVSDK ack printed 3× | extra `--out=udp:...:145x0` on `sim_vehicle.py` duplicated the default output, so every packet arrived twice | removed `--out` (`-I N` already uses 14550 + 10·N); script no longer calls `set_maximum_speed` or the telemetry-rate requests (off by default); separate MAVSDK component id per drone |
+| 13 | Drones stopped climbing at 5.5–5.9 m → `climb timeout` | ArduPilot takeoff altitude not applied, and/or telemetry frozen | take off to **3 m** (like the old working script), then climb to the layer with position setpoints; climb-stall tolerance |
+| 14 | One dead drone flooded the log | telemetry retry loop | dead server detected after 3 failures → one message, the drone is removed, others continue |
+| 15 | Hundreds of `Received ack for not-existing command` lines | harmless: MAVProxy forwards acks for its own requests | filter with `grep -v "not-existing"` |
+
+---
+
+## 7. Known issues and next steps
+
+| Issue (from the 28 Oct run) | Plan |
+|---|---|
+| Drones 2 and 3 reported **"landing timeout – still armed"** after 120 s, and drone 2 timed out flying home | probably Gazebo running slower than real time (all timeouts use wall-clock time). Check the RTF; make timeouts scale with measured speed; check ArduPilot `LAND_SPEED` / disarm settings |
+| **Overlap 19.7 %**: the planner's long straight jumps between cells (e.g. (2, −19.5) → (6, 19)) are flown and logged as coverage, and adjacent pieces share a boundary column | mark transitions between cells as transit; better cell ordering (TSP / GTSP instead of greedy) |
+| Balanced by distance, not time (drone 2 finished last) | balance by **estimated time** = distance / speed + a cost per corner |
+| Battery not simulated (stayed at 100 %) | enable SITL battery simulation (`SIM_BATT_*`, `BATT_CAPACITY`) to get real drain figures |
+| Straight transitions between cells are not checked for collisions | check transitions against the inflated map, plan around obstacles |
+| Control is centralised (one script) | **next: ROS 2 architecture**: one node per drone, shared state over DDS, distributed task allocation (auction / CBBA or DARP), reassigning a failed drone's area |
+| Detection not yet connected to flight | camera in Gazebo → YOLO node → geotagged detections |
+
+---
+
+## 8. Earlier results
 
 **BCD Geometric-Based**
 
@@ -7,10 +311,11 @@
 
 <img width="1279" height="1048" alt="planned_vs_actual" src="https://github.com/user-attachments/assets/66e87b5b-8bc5-4311-9d44-d92b49d56629" />
 
-**Multi UAVs BCD Coverage**
+**Multi-UAV BCD coverage (24 Aug 2026, previous script)**
 
 <img width="1279" height="1048" alt="combined_planned_vs_actual" src="https://github.com/user-attachments/assets/6412641e-cb6e-4108-9710-bbf6a5eecbf6" />
 
+---
 
 # Single-UAV Autonomous Coverage Using Boustrophedon Cellular Decomposition
 
