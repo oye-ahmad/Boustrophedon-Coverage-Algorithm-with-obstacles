@@ -43,8 +43,12 @@ What was fixed / improved
               failsafe, Ctrl+C makes every drone land, setpoints are streamed by
               a dedicated 10 Hz task, telemetry streams auto-restart.
  8. OUTPUT    actual_path_droneN.csv (same first columns as before, plus
-              map-frame columns), flown_waypoints_droneN.csv, mission_summary.txt
-              and swarm_planned_vs_actual.png, all in ~/coverage_map/.
+              map-frame + battery columns), flown_waypoints_droneN.csv,
+              mission_summary.txt, swarm_planned_vs_actual.png, and a full
+              METRICS REPORT (mission_metrics.txt / .csv + coverage_map.png):
+              flight times, distance, speed, battery used & drain rate,
+              area covered per drone and in total, overlap, coverage %,
+              path-tracking error, all in ~/coverage_map/.
 
 Usage
 -----
@@ -53,7 +57,7 @@ Usage
   python3 swarm_mission_mavsdk.py --num-drones 2   # use only the first 2
   python3 swarm_mission_mavsdk.py --split planner  # keep the planner's split
   python3 swarm_mission_mavsdk.py --no-layers      # everyone at the CSV altitude
-  python3 swarm_mission_mavsdk.py --plot-only      # re-plot the last mission
+  python3 swarm_mission_mavsdk.py --plot-only      # re-plot + metrics of the last mission
 
 Requires: mavsdk (2.x, gRPC API: System(port=...)), optional matplotlib.
 """
@@ -86,6 +90,8 @@ DRONES = [
 MAP_ORIGIN_LATLON: Optional[Tuple[float, float]] = None
 
 # Flight
+TAKEOFF_ALTITUDE_M = 3.0      # low ArduPilot takeoff (like the old working script);
+                              # each drone then climbs to its layer with position setpoints
 ACCEPTANCE_RADIUS_M = 1.0     # waypoint reached when closer than this (3-D)
 HOME_ACCEPTANCE_M = 1.5
 CRUISE_SPEED_M_S = 3.0        # requested max speed (best effort) + timeout estimate
@@ -113,7 +119,19 @@ HOLD_TIMEOUT_S = 20.0         # hold longer than this -> escalate to evade
 EVADE_CLIMB_M = 4.0           # vertical move when evading (away from the other drone)
 MIN_EVADE_ALT_M = 3.0
 EVADE_PUSH_M = 2.0
-STAGGER_TAKEOFF_S = 8.0       # used only if two homes are closer than SAFE_DIST_M
+STAGGER_TAKEOFF_S = 8.0       # used only if two homes are closer than STAGGER_IF_CLOSER_M
+STAGGER_IF_CLOSER_M = 3.0
+
+# Optional MAVSDK calls. OFF by default: your original (working) script never
+# used them, and on some MAVSDK 2.x + ArduPilot setups they can upset mavsdk_server.
+SET_TELEMETRY_RATES = False   # True -> ask ArduPilot for 10 Hz position streams
+SET_MAX_SPEED = False         # True -> action.set_maximum_speed(CRUISE_SPEED_M_S)
+
+# Metrics
+SWATH_WIDTH_M = 3.0           # ground width the camera sees across track; default =
+                              # planner row spacing (3 m) so neighbouring sweeps touch.
+                              # For a real camera: 2 * altitude * tan(HFOV / 2).
+COVERAGE_GRID_M = 0.5         # resolution of the area-coverage calculation
 
 # Failsafe / logging
 BATTERY_FAILSAFE_PCT = 25.0
@@ -145,6 +163,28 @@ def en_to_latlon(e: float, n: float, lat0: float, lon0: float) -> Tuple[float, f
     lat = lat0 + math.degrees(n / R_EARTH)
     lon = lon0 + math.degrees(e / (R_EARTH * math.cos(math.radians(lat0))))
     return lat, lon
+
+
+def _short(e: BaseException) -> str:
+    """One-line description of an exception (gRPC errors are very long)."""
+    det = getattr(e, "details", None)
+    if callable(det):
+        try:
+            return f"{type(e).__name__}: {det()}"
+        except Exception:  # noqa: BLE001
+            pass
+    return repr(e)[:200]
+
+
+def _server_gone(e: BaseException) -> bool:
+    """True if the error means the drone's mavsdk_server process is not there."""
+    txt = _short(e)
+    return ("Connection refused" in txt or "Connection reset" in txt or
+            "failed to connect to all addresses" in txt or "Socket closed" in txt)
+
+
+def _fmt(x: Optional[float], nd: int) -> str:
+    return "" if x is None else f"{x:.{nd}f}"
 
 
 def dist2(a: Sequence[float], b: Sequence[float]) -> float:
@@ -287,6 +327,8 @@ class Drone:
         self.ned: Optional[Tuple[float, float, float]] = None   # n, e, d
         self.vel = (0.0, 0.0, 0.0)                              # vn, ve, vd
         self.battery_pct: Optional[float] = None
+        self.battery_v: Optional[float] = None
+        self.consumed_mah: Optional[float] = None
         self.armed = False
 
         # frames
@@ -304,6 +346,8 @@ class Drone:
         self.resume_speed = 0.0                # speed we had when we last yielded
         self.streaming = False
         self.abort_reason: Optional[str] = None
+        self.server_dead = False
+        self.last_pos_t = 0.0
         self.status = "init"
 
         # metrics
@@ -381,7 +425,7 @@ class Drone:
         except asyncio.TimeoutError:
             self.warn("timed out during connect / health check")
         except Exception as e:  # noqa: BLE001  (report anything, never hide it)
-            self.warn(f"connect failed: {e!r}")
+            self.warn(f"connect failed: {_short(e)}")
         return False
 
     # ------------------------------------------------------------ telemetry
@@ -402,20 +446,41 @@ class Drone:
             try:
                 await fn(TELEMETRY_RATE_HZ)
             except Exception as e:  # noqa: BLE001
-                self.warn(f"could not set {name} rate ({e!r}); using default rate")
+                self.warn(f"could not set {name} rate ({_short(e)}); using default rate")
 
     async def _watch(self, name, stream_fn, handler):
-        while True:
+        failures = 0
+        while not self.server_dead:
             try:
                 async for msg in stream_fn():
+                    failures = 0
                     handler(msg)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
-                self.warn(f"telemetry '{name}' stream error {e!r}; restarting in 1 s")
+                failures += 1
+                if _server_gone(e):
+                    if failures >= 3:
+                        self._declare_server_dead()
+                        return
+                elif failures in (1, 5) or failures % 30 == 0:
+                    self.warn(f"telemetry '{name}' stream error ({_short(e)}); retrying")
             await asyncio.sleep(1.0)
 
+    def _declare_server_dead(self):
+        if self.server_dead:
+            return
+        self.server_dead = True
+        self.abort_reason = self.abort_reason or "mavsdk_server crashed"
+        msg = ("its mavsdk_server process STOPPED (crashed) - this drone is out of the mission. "
+               "Scroll up in this terminal for the server's own error message.")
+        if self.armed or self.rel_alt > 0.5:
+            msg += (f" Drone may still be AIRBORNE: type 'mode land' in its ArduPilot/MAVProxy "
+                    f"console (instance {self.id - 1}).")
+        self.warn(msg)
+
     def _on_position(self, p):
+        self.last_pos_t = time.monotonic()
         self.lat, self.lon = p.latitude_deg, p.longitude_deg
         self.abs_alt, self.rel_alt = p.absolute_altitude_m, p.relative_altitude_m
 
@@ -427,6 +492,11 @@ class Drone:
         self.vel = (pv.velocity.north_m_s, pv.velocity.east_m_s, pv.velocity.down_m_s)
 
     def _on_battery(self, b):
+        v, ah = getattr(b, "voltage_v", None), getattr(b, "capacity_consumed_ah", None)
+        if v is not None and not math.isnan(v) and v > 0:
+            self.battery_v = v
+        if ah is not None and not math.isnan(ah) and ah >= 0:
+            self.consumed_mah = ah * 1000.0
         pct = b.remaining_percent
         if pct is None or math.isnan(pct) or pct < 0:
             return
@@ -446,7 +516,8 @@ class Drone:
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["timestamp", "latitude", "longitude", "abs_altitude", "rel_altitude",
-                        "map_e", "map_n", "map_alt", "status", "override", "battery_pct"])
+                        "map_e", "map_n", "map_alt", "status", "override", "battery_pct",
+                        "battery_v", "consumed_mah"])
             while True:
                 if self.lat is not None and self.frame_ready and self.ned is not None \
                         and self.status not in ("init", "ready", "done"):
@@ -454,8 +525,8 @@ class Drone:
                     w.writerow([f"{time.time():.3f}", f"{self.lat:.8f}", f"{self.lon:.8f}",
                                 f"{self.abs_alt:.2f}", f"{self.rel_alt:.2f}",
                                 f"{e:.2f}", f"{n:.2f}", f"{a:.2f}", self.status,
-                                self.override or "", "" if self.battery_pct is None
-                                else f"{self.battery_pct:.0f}"])
+                                self.override or "", _fmt(self.battery_pct, 1),
+                                _fmt(self.battery_v, 2), _fmt(self.consumed_mah, 0)])
                     f.flush()
                 await asyncio.sleep(1.0 / LOG_RATE_HZ)
 
@@ -482,7 +553,7 @@ class Drone:
 
     async def _stream_setpoints(self):
         failures = 0
-        while self.streaming:
+        while self.streaming and not self.server_dead:
             tgt = self._current_target()
             if tgt is not None:
                 try:
@@ -490,8 +561,11 @@ class Drone:
                     failures = 0
                 except Exception as e:  # noqa: BLE001
                     failures += 1
+                    if _server_gone(e) and failures >= 5:
+                        self._declare_server_dead()
+                        break
                     if failures in (1, 10) or failures % 50 == 0:
-                        self.warn(f"setpoint send failed ({failures}x in a row): {e!r}")
+                        self.warn(f"setpoint send failed ({failures}x in a row): {_short(e)}")
             await asyncio.sleep(1.0 / SETPOINT_RATE_HZ)
 
     # ------------------------------------------------------------- movement
@@ -504,10 +578,12 @@ class Drone:
                      3.0 * dist3(self.map_pos(), p) / CRUISE_SPEED_M_S + 10.0)
         active, last = 0.0, time.monotonic()
         while True:
-            if self.swarm.stop_event.is_set() or (self.abort_reason and self.status == "coverage"):
+            if self.server_dead or self.swarm.stop_event.is_set() or \
+                    (self.abort_reason and self.status in ("transit", "coverage")):
                 return False
             now = time.monotonic()
             dt, last = now - last, now
+            self._check_telemetry_alive()
             if self.override:
                 self.hold_time += dt
             else:
@@ -524,38 +600,54 @@ class Drone:
         if self.swarm.stop_event.is_set():
             raise RuntimeError("stop requested before takeoff")
         self.status = "takeoff"
-        await self.sys.action.set_takeoff_altitude(self.alt)
-        try:
-            await self.sys.action.set_maximum_speed(CRUISE_SPEED_M_S)
-        except Exception as e:  # noqa: BLE001
-            self.warn(f"set_maximum_speed not accepted ({e!r}); using autopilot default")
+        await self.sys.action.set_takeoff_altitude(TAKEOFF_ALTITUDE_M)
+        if SET_MAX_SPEED:
+            try:
+                await self.sys.action.set_maximum_speed(CRUISE_SPEED_M_S)
+            except Exception as e:  # noqa: BLE001
+                self.warn(f"set_maximum_speed not accepted ({_short(e)}); using autopilot default")
 
         for attempt in range(1, ARM_RETRIES + 1):
             try:
                 await self.sys.action.arm()
                 break
             except Exception as e:  # noqa: BLE001
-                self.warn(f"arming attempt {attempt}/{ARM_RETRIES} failed: {e!r}")
+                self.warn(f"arming attempt {attempt}/{ARM_RETRIES} failed: {_short(e)}")
                 if attempt == ARM_RETRIES:
                     raise RuntimeError("could not arm") from e
                 await asyncio.sleep(3.0)
-        self.info(f"armed, taking off to {self.alt:.1f} m")
+        self.info(f"armed, taking off to {TAKEOFF_ALTITUDE_M:.1f} m")
         await self.sys.action.takeoff()
         self.t_takeoff = time.monotonic()
 
+        target = TAKEOFF_ALTITUDE_M - 0.5
         t_end = time.monotonic() + CLIMB_TIMEOUT_S
-        while self.rel_alt < self.alt - 0.5:
+        best, best_t = self.rel_alt, time.monotonic()
+        while self.rel_alt < target:
+            now = time.monotonic()
             if self.swarm.stop_event.is_set():
                 raise RuntimeError("stop requested during climb")
-            if time.monotonic() > t_end:
-                raise RuntimeError(f"climb timeout (at {self.rel_alt:.1f} m of {self.alt:.1f} m)")
+            self._check_telemetry_alive()
+            if self.rel_alt > best + 0.1:
+                best, best_t = self.rel_alt, now
+            elif now - best_t > 10.0 and self.rel_alt >= 2.0:
+                self.warn(f"climb stalled at {self.rel_alt:.1f} m - continuing with position control")
+                break
+            if now > t_end:
+                raise RuntimeError(f"climb timeout (at {self.rel_alt:.1f} m of {TAKEOFF_ALTITUDE_M:.1f} m)")
             await asyncio.sleep(0.2)
         self.info(f"airborne at {self.rel_alt:.1f} m")
 
+    def _check_telemetry_alive(self):
+        age = time.monotonic() - self.last_pos_t
+        if self.last_pos_t and age > 5.0:
+            raise RuntimeError(f"no position telemetry for {age:.0f} s "
+                               "(mavsdk_server or MAVLink link problem)")
+
     async def _start_offboard(self):
         from mavsdk.offboard import OffboardError
-        e, n, _ = self.map_pos()
-        self.goal = (e, n, self.alt)                 # hold here first
+        e, n, a = self.map_pos()
+        self.goal = (e, n, max(a, 2.0))              # hold where we are first
         await self.sys.offboard.set_position_ned(self.to_ned(self.goal))
         self.streaming = True
         self._stream_task = asyncio.create_task(self._stream_setpoints())
@@ -566,6 +658,11 @@ class Drone:
         except OffboardError as err:
             # ArduPilot often answers this although GUIDED accepts the setpoints.
             self.warn(f"offboard.start() answered {err._result.result}; continuing in GUIDED")
+        # climb straight up to this drone's layer altitude
+        if not await self.go_to((e, n, self.alt), 0.7, f"layer altitude {self.alt:.0f} m"):
+            raise RuntimeError(f"could not reach layer altitude {self.alt:.0f} m "
+                               f"(at {self.rel_alt:.1f} m)")
+        self.info(f"at layer altitude {self.rel_alt:.1f} m")
 
     async def _stop_stream(self):
         self.streaming = False
@@ -580,14 +677,14 @@ class Drone:
         try:
             await self.sys.offboard.stop()
         except Exception as e:  # noqa: BLE001
-            self.warn(f"offboard.stop(): {e!r} (continuing with land)")
+            self.warn(f"offboard.stop(): {_short(e)} (continuing with land)")
         self.info(f"landing ({reason})")
         for attempt in range(3):
             try:
                 await self.sys.action.land()
                 break
             except Exception as e:  # noqa: BLE001
-                self.warn(f"land command failed ({e!r}), retry {attempt + 1}/3")
+                self.warn(f"land command failed ({_short(e)}), retry {attempt + 1}/3")
                 await asyncio.sleep(1.0)
         t_end = time.monotonic() + LAND_TIMEOUT_S
         while self.armed:
@@ -616,8 +713,9 @@ class Drone:
 
             self.info(f"flying to start of my area ({len(waypoints)} waypoints, "
                       f"{path_length(waypoints):.0f} m)")
-            self.status = "coverage"
             for i, wp in enumerate(waypoints):
+                # leg to the first waypoint is transit, not coverage (kept out of the metrics)
+                self.status = "transit" if i == 0 else "coverage"
                 ok = await self.go_to(wp, ACCEPTANCE_RADIUS_M, f"WP {i + 1}/{len(waypoints)}")
                 if ok:
                     self.reached += 1
@@ -644,16 +742,22 @@ class Drone:
             await self._safe_land("cancelled")
             raise
         except Exception as e:  # noqa: BLE001
-            self.abort_reason = self.abort_reason or f"error: {e!r}"
-            self.warn(f"mission error: {e!r}")
+            if _server_gone(e):
+                self._declare_server_dead()
+                self.status = "lost"
+                return
+            self.abort_reason = self.abort_reason or f"error: {_short(e)}"
+            self.warn(f"mission error: {_short(e)}")
             await self._safe_land("error")
 
     async def _safe_land(self, reason: str):
+        if self.server_dead:
+            return
         if self.armed and self.status not in ("landing", "landed"):
             try:
                 await self._land(reason)
             except Exception as e:  # noqa: BLE001
-                self.warn(f"emergency land failed: {e!r}")
+                self.warn(f"emergency land failed: {_short(e)}")
 
     async def shutdown(self):
         await self._stop_stream()
@@ -665,7 +769,13 @@ class Drone:
 
 def _mavsdk_system(grpc_port: int):
     from mavsdk import System          # imported lazily so --dry-run works without it
-    return System(port=grpc_port)
+    # give every mavsdk_server its own MAVLink component id so they never look
+    # like the same ground station
+    compid = 190 + (grpc_port - 50051) % 40
+    try:
+        return System(port=grpc_port, compid=compid)
+    except TypeError:                  # very old mavsdk-python without compid
+        return System(port=grpc_port)
 
 
 # =============================================================================
@@ -865,6 +975,11 @@ class Swarm:
             return
 
         # 1. connect
+        try:
+            from importlib.metadata import version
+            log("SWARM", f"mavsdk-python {version('mavsdk')}")
+        except Exception:  # noqa: BLE001
+            pass
         for d in self.drones:                         # one mavsdk_server per drone
             await d.init_system()
             await asyncio.sleep(0.3)
@@ -882,7 +997,8 @@ class Swarm:
         # 2. telemetry + shared frame
         for d in self.drones:
             d.start_telemetry()
-            await d.set_rates()
+            if SET_TELEMETRY_RATES:
+                await d.set_rates()
         try:
             await asyncio.gather(*[d.measure_origin() for d in self.drones])
             lat0, lon0 = MAP_ORIGIN_LATLON or self.drones[0].origin_latlon
@@ -918,6 +1034,8 @@ class Swarm:
             for d in self.drones:
                 await d.shutdown()
         plot_mission(self.drones, [d.waypoints for d in self.drones], actual=True)
+        mission_report([d.id for d in self.drones], {d.id: d.waypoints for d in self.drones},
+                       min_sep=self.min_sep)
 
     # ------------------------------------------------------------- helpers
     def _finalise_plan(self, segments: List[List[Point]], layers: bool) -> List[List[Point]]:
@@ -935,9 +1053,9 @@ class Swarm:
         return plan
 
     def _takeoff_delays(self, homes) -> List[float]:
-        close = any(dist2(a, b) < SAFE_DIST_M for a, b in itertools.combinations(homes, 2))
+        close = any(dist2(a, b) < STAGGER_IF_CLOSER_M for a, b in itertools.combinations(homes, 2))
         if close:
-            log("SWARM", f"WARNING: some drones start closer than {SAFE_DIST_M} m - "
+            log("SWARM", f"WARNING: some drones start closer than {STAGGER_IF_CLOSER_M} m - "
                          f"staggering takeoffs by {STAGGER_TAKEOFF_S:.0f} s")
             return [i * STAGGER_TAKEOFF_S for i in range(len(homes))]
         return [0.0] * len(homes)
@@ -1041,12 +1159,268 @@ def read_map_track(drone_id: int) -> Tuple[List[float], List[float]]:
 
 
 # =============================================================================
+# Mission metrics (computed from the logs, so --plot-only can redo them)
+# =============================================================================
+def _read_log(drone_id: int) -> List[dict]:
+    path = os.path.join(WAYPOINT_DIR, f"actual_path_drone{drone_id}.csv")
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            try:
+                rows.append({
+                    "t": float(r["timestamp"]), "rel": float(r["rel_altitude"]),
+                    "e": float(r["map_e"]), "n": float(r["map_n"]), "status": r.get("status", ""),
+                    "batt": float(r["battery_pct"]) if r.get("battery_pct") else None,
+                    "volt": float(r["battery_v"]) if r.get("battery_v") else None,
+                    "mah": float(r["consumed_mah"]) if r.get("consumed_mah") else None,
+                })
+            except (KeyError, ValueError):
+                continue
+    return rows
+
+
+def _cells_along(points: List[Tuple[float, float]], half_width: float,
+                 grid: float, max_gap: float = 10.0) -> set:
+    """Grid cells whose centre lies within half_width of the polyline."""
+    r = int(math.ceil(half_width / grid))
+    offsets = [(i, j) for i in range(-r, r + 1) for j in range(-r, r + 1)
+               if math.hypot(i, j) * grid <= half_width]
+    cells: set = set()
+
+    def mark(x, y):
+        ci, cj = int(math.floor(x / grid)), int(math.floor(y / grid))
+        for di, dj in offsets:
+            cells.add((ci + di, cj + dj))
+
+    for k, (x, y) in enumerate(points):
+        mark(x, y)
+        if k + 1 < len(points):
+            x2, y2 = points[k + 1]
+            d = math.hypot(x2 - x, y2 - y)
+            if 0 < d <= max_gap:                    # fill the gap between samples
+                steps = int(d / (grid / 2))
+                for s in range(1, steps):
+                    mark(x + (x2 - x) * s / steps, y + (y2 - y) * s / steps)
+    return cells
+
+
+def _dist_to_path(p: Tuple[float, float], path: List[Point]) -> float:
+    best = float("inf")
+    for a, b in zip(path, path[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+        best = min(best, math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy))
+    return best
+
+
+def mission_report(drone_ids: List[int], planned: Dict[int, List[Point]],
+                   min_sep: Optional[float] = None) -> Optional[dict]:
+    """Print and save every post-flight metric. Returns the numbers as a dict."""
+    g, half = COVERAGE_GRID_M, SWATH_WIDTH_M / 2.0
+    cell_area = g * g
+    per: Dict[int, dict] = {}
+    covered: Dict[int, set] = {}
+
+    for did in drone_ids:
+        rows = _read_log(did)
+        m: dict = {"id": did}
+        per[did] = m
+        covered[did] = set()
+        if not rows:
+            m["missing"] = True
+            continue
+        air = [r for r in rows if r["rel"] > 1.0]
+        cov = [r for r in rows if r["status"] == "coverage"]
+        m["t_takeoff"] = air[0]["t"] if air else None
+        m["t_landed"] = air[-1]["t"] if air else None
+        m["flight_s"] = (air[-1]["t"] - air[0]["t"]) if len(air) > 1 else 0.0
+        m["coverage_s"] = (cov[-1]["t"] - cov[0]["t"]) if len(cov) > 1 else 0.0
+        m["t_cov_start"] = cov[0]["t"] if cov else None
+        m["t_cov_end"] = cov[-1]["t"] if cov else None
+        m["dist_m"] = sum(math.hypot(b["e"] - a["e"], b["n"] - a["n"]) for a, b in zip(air, air[1:]))
+        cov_dist = sum(math.hypot(b["e"] - a["e"], b["n"] - a["n"]) for a, b in zip(cov, cov[1:]))
+        m["coverage_dist_m"] = cov_dist
+        m["avg_speed"] = cov_dist / m["coverage_s"] if m["coverage_s"] > 0 else 0.0
+        m["planned_m"] = path_length(planned.get(did) or [])
+
+        batt = [r["batt"] for r in rows if r["batt"] is not None]
+        volt = [r["volt"] for r in rows if r["volt"] is not None]
+        mah = [r["mah"] for r in rows if r["mah"] is not None]
+        m["batt_start"], m["batt_end"] = (batt[0], batt[-1]) if batt else (None, None)
+        m["batt_used"] = (batt[0] - batt[-1]) if batt else None
+        m["volt_start"], m["volt_end"] = (volt[0], volt[-1]) if volt else (None, None)
+        m["mah_used"] = (mah[-1] - mah[0]) if mah else None
+        mins = m["flight_s"] / 60.0
+        m["drain_pct_min"] = m["batt_used"] / mins if (m["batt_used"] is not None and mins > 0) else None
+        if m["drain_pct_min"] and m["drain_pct_min"] > 0 and m["batt_end"] is not None:
+            m["endurance_left_min"] = max(0.0, m["batt_end"] - BATTERY_FAILSAFE_PCT) / m["drain_pct_min"]
+        else:
+            m["endurance_left_min"] = None
+
+        covered[did] = _cells_along([(r["e"], r["n"]) for r in cov], half, g)
+        m["area_m2"] = len(covered[did]) * cell_area
+
+        wp = planned.get(did) or []
+        if len(wp) >= 2 and cov:
+            errs = [_dist_to_path((r["e"], r["n"]), wp) for r in cov]
+            m["xte_mean"] = sum(errs) / len(errs)
+            m["xte_rmse"] = math.sqrt(sum(e * e for e in errs) / len(errs))
+            m["xte_max"] = max(errs)
+
+    # swarm totals
+    target: set = set()
+    for did in drone_ids:
+        wp = planned.get(did) or []
+        target |= _cells_along([(p[0], p[1]) for p in wp], half, g, max_gap=1e9)
+    union: set = set().union(*covered.values()) if covered else set()
+    count: Dict[Tuple[int, int], int] = {}
+    for cs in covered.values():
+        for c in cs:
+            count[c] = count.get(c, 0) + 1
+    overlap = sum(1 for v in count.values() if v > 1)
+    flown = [m for m in per.values() if not m.get("missing") and m.get("t_takeoff")]
+    tot = {
+        "mission_s": (max(m["t_landed"] for m in flown) - min(m["t_takeoff"] for m in flown)) if flown else 0.0,
+        "coverage_makespan_s": (max(m["t_cov_end"] for m in flown if m["t_cov_end"]) -
+                                min(m["t_cov_start"] for m in flown if m["t_cov_start"]))
+        if any(m.get("t_cov_start") for m in flown) else 0.0,
+        "target_m2": len(target) * cell_area,
+        "covered_m2": len(union) * cell_area,
+        "covered_target_m2": len(union & target) * cell_area,
+        "overlap_m2": overlap * cell_area,
+        "dist_m": sum(m["dist_m"] for m in flown),
+        "batt_used_sum": sum(m["batt_used"] for m in flown if m.get("batt_used") is not None),
+        "min_sep": min_sep,
+    }
+    tot["coverage_pct"] = 100.0 * tot["covered_target_m2"] / tot["target_m2"] if tot["target_m2"] else 0.0
+    tot["overlap_pct"] = 100.0 * tot["overlap_m2"] / tot["covered_m2"] if tot["covered_m2"] else 0.0
+    tot["m2_per_pct"] = tot["covered_m2"] / tot["batt_used_sum"] if tot["batt_used_sum"] > 0 else None
+
+    # ---------------------------------------------------------------- print
+    def f(x, fmt="{:.1f}", unit=""):
+        return "n/a" if x is None else fmt.format(x) + unit
+
+    def mmss(sec):
+        return "n/a" if sec is None else f"{int(sec // 60)}:{int(round(sec % 60)):02d}"
+
+    L = ["", "=" * 78, "MISSION METRICS".center(78), "=" * 78,
+         f"Swath width used for area: {SWATH_WIDTH_M:.1f} m   (grid {g:.1f} m)", ""]
+    for did in drone_ids:
+        m = per[did]
+        L.append(f"--- Drone {did} " + "-" * 64)
+        if m.get("missing"):
+            L.append("  no log found")
+            continue
+        share = 100.0 * m["area_m2"] / tot["covered_m2"] if tot["covered_m2"] else 0.0
+        L += [
+            f"  Flight time (takeoff->landing) : {mmss(m['flight_s'])} min:s  ({m['flight_s']:.0f} s)",
+            f"  Coverage time                  : {mmss(m['coverage_s'])} min:s",
+            f"  Distance flown (total/coverage): {m['dist_m']:.0f} m / {m['coverage_dist_m']:.0f} m"
+            f"   (planned {m['planned_m']:.0f} m)",
+            f"  Average coverage speed         : {m['avg_speed']:.2f} m/s",
+            f"  Area covered                   : {m['area_m2']:.0f} m2  ({share:.0f}% of swarm total)",
+            f"  Path tracking error            : mean {f(m.get('xte_mean'), '{:.2f}')} m, "
+            f"RMSE {f(m.get('xte_rmse'), '{:.2f}')} m, max {f(m.get('xte_max'), '{:.2f}')} m",
+            f"  Battery                        : {f(m['batt_start'], '{:.0f}', '%')} -> "
+            f"{f(m['batt_end'], '{:.0f}', '%')}  (used {f(m['batt_used'], '{:.1f}', '%')}, "
+            f"{f(m['drain_pct_min'], '{:.2f}', ' %/min')})",
+            f"  Voltage / charge used          : {f(m['volt_start'], '{:.2f}', ' V')} -> "
+            f"{f(m['volt_end'], '{:.2f}', ' V')}, {f(m['mah_used'], '{:.0f}', ' mAh')}",
+            f"  Est. flight time left at end   : {f(m['endurance_left_min'], '{:.1f}', ' min')} "
+            f"(down to {BATTERY_FAILSAFE_PCT:.0f}% failsafe)",
+        ]
+    L += ["", "--- Whole swarm " + "-" * 62,
+          f"  Total mission time (first takeoff -> last landing): {mmss(tot['mission_s'])} min:s "
+          f"({tot['mission_s']:.0f} s)",
+          f"  Coverage makespan (first start -> last finish)    : {mmss(tot['coverage_makespan_s'])} min:s",
+          f"  Target area (planned paths x swath)               : {tot['target_m2']:.0f} m2",
+          f"  Total area covered (union, no double counting)    : {tot['covered_m2']:.0f} m2",
+          f"  Coverage of target area                           : {tot['coverage_pct']:.1f} %",
+          f"  Overlap (seen by 2+ drones)                       : {tot['overlap_m2']:.0f} m2 "
+          f"({tot['overlap_pct']:.1f} % of covered)",
+          f"  Total distance flown                              : {tot['dist_m']:.0f} m",
+          f"  Total battery used (sum of drones)                : {tot['batt_used_sum']:.1f} %",
+          f"  Area per 1% battery                               : {f(tot['m2_per_pct'], '{:.0f}', ' m2')}",
+          f"  Minimum separation between drones                 : {f(min_sep, '{:.1f}', ' m')}",
+          "=" * 78]
+    text = "\n".join(L)
+    print(text, flush=True)
+
+    # ---------------------------------------------------------------- save
+    try:
+        with open(os.path.join(WAYPOINT_DIR, "mission_metrics.txt"), "w") as fh:
+            fh.write(text.strip() + "\n")
+        keys = ["id", "flight_s", "coverage_s", "dist_m", "coverage_dist_m", "planned_m", "avg_speed",
+                "area_m2", "xte_mean", "xte_rmse", "xte_max", "batt_start", "batt_end", "batt_used",
+                "drain_pct_min", "volt_start", "volt_end", "mah_used", "endurance_left_min"]
+        with open(os.path.join(WAYPOINT_DIR, "mission_metrics.csv"), "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["drone"] + keys[1:])
+            for did in drone_ids:
+                m = per[did]
+                w.writerow([did] + ["" if m.get(k) is None else
+                                    (f"{m[k]:.3f}" if isinstance(m[k], float) else m[k]) for k in keys[1:]])
+            w.writerow([])
+            for k, v in tot.items():
+                w.writerow([f"swarm_{k}", "" if v is None else f"{v:.3f}"])
+        log("SWARM", f"metrics saved -> {os.path.join(WAYPOINT_DIR, 'mission_metrics.txt')} (+ .csv)")
+    except OSError as e:
+        log("SWARM", f"could not save metrics: {e}")
+    _plot_coverage(drone_ids, covered, count, target, tot)
+    return {"drones": per, "swarm": tot}
+
+
+def _plot_coverage(drone_ids, covered, count, target, tot):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+    except ImportError:
+        return
+    g = COVERAGE_GRID_M
+    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
+    fig, ax = plt.subplots(figsize=(9, 8))
+    missed = target - set(count)
+    if missed:
+        ax.scatter([(c[0] + .5) * g for c in missed], [(c[1] + .5) * g for c in missed],
+                   s=7, marker="s", color="#d62728", alpha=0.35, linewidths=0)
+    for k, did in enumerate(drone_ids):
+        cs = [c for c in covered[did] if count.get(c, 0) == 1]
+        ax.scatter([(c[0] + .5) * g for c in cs], [(c[1] + .5) * g for c in cs],
+                   s=7, marker="s", color=colors[k % len(colors)], alpha=0.55, linewidths=0)
+    ov = [c for c, v in count.items() if v > 1]
+    if ov:
+        ax.scatter([(c[0] + .5) * g for c in ov], [(c[1] + .5) * g for c in ov],
+                   s=7, marker="s", color="black", alpha=0.7, linewidths=0)
+    handles = [Patch(color=colors[k % len(colors)], alpha=0.55,
+                     label=f"Drone {did}: {len(covered[did]) * g * g:.0f} m2")
+               for k, did in enumerate(drone_ids)]
+    handles += [Patch(color="black", alpha=0.7, label=f"Overlap: {tot['overlap_m2']:.0f} m2"),
+                Patch(color="#d62728", alpha=0.35, label="Planned but not covered")]
+    ax.legend(handles=handles, fontsize=8, loc="best")
+    ax.set_aspect("equal")
+    ax.grid(alpha=0.3)
+    ax.set_xlabel("East / map x (m)")
+    ax.set_ylabel("North / map y (m)")
+    ax.set_title(f"Area coverage - {tot['covered_m2']:.0f} m2 covered, "
+                 f"{tot['coverage_pct']:.1f}% of target (swath {SWATH_WIDTH_M:.1f} m)")
+    out = os.path.join(WAYPOINT_DIR, "coverage_map.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log("SWARM", f"coverage map saved -> {out}")
+
+
+# =============================================================================
 # Entry point
 # =============================================================================
 def parse_args():
     ap = argparse.ArgumentParser(description="Multi-drone BCD coverage mission (MAVSDK, ArduPilot)")
     ap.add_argument("--dry-run", action="store_true", help="plan and plot only, no drones")
-    ap.add_argument("--plot-only", action="store_true", help="re-plot the last mission logs")
+    ap.add_argument("--plot-only", action="store_true", help="re-plot and re-compute all metrics from the last mission logs")
     ap.add_argument("--split", choices=["auto", "length", "planner"], default="auto",
                     help="auto: keep planner split if balanced, else re-split by length (default)")
     ap.add_argument("--no-layers", action="store_true",
@@ -1066,6 +1440,7 @@ async def amain(args):
         segs = [read_waypoints(os.path.join(WAYPOINT_DIR, f"flown_waypoints_drone{c['id']}.csv"))
                 or [] for c in cfgs]
         plot_mission(swarm.drones, segs, actual=True)
+        mission_report([c["id"] for c in cfgs], {c["id"]: sg for c, sg in zip(cfgs, segs)})
         return
     await swarm.run(args.split, args.dry_run, not args.no_layers, args.allow_partial)
 
